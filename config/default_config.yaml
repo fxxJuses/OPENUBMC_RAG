@@ -1,0 +1,93 @@
+# openUBMC Code RAG Configuration
+# GitCode repository configuration
+git:
+  base_url: "https://gitcode.com/openUBMC"
+  clone_dir: "./data/repos"
+  branch: "main"
+  auth_token: ""
+
+  # Repositories to index
+  repos:
+    - name: "sensor"
+      description: "IPMI sensor and SEL event management"
+    - name: "sensor_mgmt"
+      description: "Sensor management service"
+    - name: "devmon"
+      description: "Device monitoring"
+    - name: "vpd"
+      description: "Vital Product Data management"
+    - name: "frudata"
+      description: "FRU data management"
+    - name: "fructrl"
+      description: "FRU control"
+    - name: "bus_tools"
+      description: "Bus communication tools"
+    - name: "libipmi"
+      description: "IPMI library"
+      language_hint: "cpp"
+    - name: "power_mgmt"
+      description: "Power management"
+
+# File ingestion settings
+ingestion:
+  languages:
+    lua:
+      extensions: [".lua"]
+      enabled: true
+    c:
+      extensions: [".c", ".h"]
+      enabled: true
+    cpp:
+      extensions: [".cpp", ".hpp", ".cc", ".cxx"]
+      enabled: true
+    python:
+      extensions: [".py"]
+      enabled: false
+    json:
+      extensions: [".json"]
+      enabled: false
+    markdown:
+      extensions: [".md"]
+      enabled: false
+
+  exclude_paths:
+    - "build/"
+    - "gen/"
+    - ".git/"
+    - "test/"
+    - "tests/"
+    - "dt_test/"
+    - "third_party/"
+
+  max_chunk_lines: 200
+  min_chunk_lines: 5
+  overlap_lines: 5
+
+# Indexing configuration
+indexing:
+  persist_dir: "./data/index"
+  embedding_provider: "dashscope"    # DashScope text-embedding-v3 API
+  embedding_dim: 1024
+  dashscope_api_key: ""             # Leave empty to use .env or DASHSCOPE_API_KEY env var
+  chroma_collection: "openubmc_code"
+  bm25_k1: 1.5
+  bm25_b: 0.75
+
+# Search configuration
+search:
+  rrf_k: 60
+  default_top_k: 10
+  max_top_k: 50
+  bm25_weight: 0.4
+  dense_weight: 0.6
+  code_query_bm25_boost: 0.2
+  symbol_match_boost: 1.5
+  filepath_match_boost: 1.3
+  mds_model_match_boost: 2.0
+  diversity_max_per_file: 3
+
+# MCP server configuration
+mcp:
+  transport: "stdio"
+  host: "localhost"
+  port: 8080

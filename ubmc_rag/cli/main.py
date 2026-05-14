@@ -1,0 +1,36 @@
+"""CLI entry point and command registration."""
+
+from __future__ import annotations
+
+import typer
+
+app = typer.Typer(
+    name="ubmc-rag",
+    help="Code RAG system for openUBMC micro-component architecture",
+    no_args_is_help=True,
+)
+
+
+@app.command()
+def version():
+    """Show version."""
+    from ubmc_rag import __version__
+    typer.echo(f"ubmc-rag {__version__}")
+
+
+# Register sub-commands
+from ubmc_rag.cli.index_cmd import register as register_index  # noqa: E402
+from ubmc_rag.cli.search_cmd import register as register_search  # noqa: E402
+from ubmc_rag.cli.components_cmd import register as register_components  # noqa: E402
+from ubmc_rag.cli.serve_cmd import register as register_serve  # noqa: E402
+from ubmc_rag.cli.chat_cmd import register as register_chat  # noqa: E402
+
+register_index(app)
+register_search(app)
+register_components(app)
+register_serve(app)
+register_chat(app)
+
+
+if __name__ == "__main__":
+    app()
