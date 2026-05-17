@@ -27,6 +27,10 @@ git:
       language_hint: "cpp"
     - name: "power_mgmt"
       description: "Power management"
+    - name: "bios"
+      description: "BIOS management"
+    - name: "pcie_device"
+      description: "PCIe device management"
 
 # File ingestion settings
 ingestion:

@@ -19,9 +19,12 @@ def register(app: typer.Typer) -> None:
         api_key: str = typer.Option(
             "", "--api-key", help="DashScope API key (or set DASHSCOPE_API_KEY)"
         ),
+        debug: bool = typer.Option(
+            False, "--debug", "-d", help="Show LLM prompts, responses and tracing info"
+        ),
     ) -> None:
         """Start interactive chat with the code RAG assistant."""
         from ubmc_rag.chat.chain import run_chat
 
         config = AppConfig.from_yaml(config_path)
-        run_chat(config, api_key=api_key or None, model=model)
+        run_chat(config, api_key=api_key or None, model=model, debug=debug)

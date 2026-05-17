@@ -33,7 +33,30 @@ class UBMCRetriever(BaseRetriever):
             return []
 
         results = self.engine.search(query, top_k=self.top_k)
+        return self._results_to_docs(results)
 
+    def multi_query_search(self, queries: list[str], top_k: int | None = None) -> list[Document]:
+        """Execute multiple queries and merge deduplicated results."""
+        if self.engine is None:
+            return []
+
+        top_k = top_k or self.top_k
+        merged: dict[str, tuple] = {}  # chunk_id -> (result, score)
+
+        for q in queries:
+            results = self.engine.search(q, top_k=top_k)
+            for r in results:
+                d = r.to_dict()
+                chunk_id = f"{d['repo']}/{d['file_path']}:{d['start_line']}-{d['end_line']}"
+                score = d["score"]
+                if chunk_id not in merged or score > merged[chunk_id][1]:
+                    merged[chunk_id] = (r, score)
+
+        ranked = sorted(merged.values(), key=lambda x: x[1], reverse=True)
+        return self._results_to_docs([r for r, _ in ranked[:top_k]])
+
+    @staticmethod
+    def _results_to_docs(results) -> list[Document]:
         docs = []
         for r in results:
             d = r.to_dict()
