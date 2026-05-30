@@ -1,4 +1,14 @@
-"""FastMCP server for openUBMC Code RAG — exposes search and analysis tools."""
+"""FastMCP 服务器，将 openUBMC 代码检索能力暴露为 MCP 工具。
+
+通过 MCP (Model Context Protocol) 协议提供以下工具：
+- search_code: 混合语义+关键词代码搜索
+- find_definitions: 符号定义查找
+- find_references: 符号引用查找
+- list_components: 组件列表
+- get_component_deps: 组件依赖分析
+
+同时提供 MCP Resource 接口用于获取组件的 MDS 模型和 IPMI 命令定义。
+"""
 
 from __future__ import annotations
 
@@ -9,27 +19,30 @@ from typing import Optional
 from mcp.server.fastmcp import FastMCP
 
 from ubmc_rag.config.settings import AppConfig
-from ubmc_rag.indexing.embedder import Embedder
 from ubmc_rag.indexing.index_manager import IndexManager
-from ubmc_rag.models.component_info import ComponentInfo
 from ubmc_rag.search.hybrid_search import HybridSearchEngine
 
 logger = logging.getLogger(__name__)
 
-# Global state (initialized on server start)
+# 全局状态（服务器启动时初始化）
 _config: Optional[AppConfig] = None
 _index_mgr: Optional[IndexManager] = None
 _engine: Optional[HybridSearchEngine] = None
 
 
 def _ensure_initialized() -> tuple[AppConfig, IndexManager, HybridSearchEngine]:
+    """确保服务器已初始化，返回全局状态元组。"""
     if _engine is None:
         raise RuntimeError("Server not initialized. Call init_server() first.")
     return _config, _index_mgr, _engine
 
 
 def init_server(config: AppConfig) -> None:
-    """Initialize the server state by loading the index."""
+    """初始化服务器状态，加载索引并构建搜索引擎。
+
+    Args:
+        config: 应用配置
+    """
     global _config, _index_mgr, _engine
 
     _config = config
@@ -48,7 +61,16 @@ def init_server(config: AppConfig) -> None:
 
 
 def create_server(config: AppConfig) -> FastMCP:
-    """Create and configure the FastMCP server."""
+    """创建并配置 FastMCP 服务器实例。
+
+    注册所有工具函数和资源端点，然后返回配置好的 FastMCP 实例。
+
+    Args:
+        config: 应用配置
+
+    Returns:
+        配置完成的 FastMCP 服务器
+    """
     init_server(config)
 
     mcp = FastMCP(
@@ -56,10 +78,8 @@ def create_server(config: AppConfig) -> FastMCP:
         version="0.1.0",
         instructions=(
             "Code RAG server for the openUBMC project. "
-            "Provides semantic and keyword search over openUBMC's Lua, C/C++, Python, JSON, "
-            "and documentation codebase. Use search_code for general queries, "
-            "find_definitions to locate symbol definitions, and get_component_deps "
-            "to understand component dependencies."
+            "Provides semantic and keyword search over openUBMC's Lua, C/C++, "
+            "Python, JSON, and documentation codebase."
         ),
     )
 
@@ -71,14 +91,14 @@ def create_server(config: AppConfig) -> FastMCP:
         chunk_type: Optional[str] = None,
         top_k: int = 10,
     ) -> str:
-        """Search openUBMC codebase using hybrid semantic + keyword search.
+        """混合语义+关键词代码搜索。
 
         Args:
-            query: Natural language or code snippet search query
-            language: Filter by language (lua, c, cpp, python, json, markdown)
-            repo: Filter by repository/component name (e.g., "sensor", "libipmi")
-            chunk_type: Filter by chunk type (function, class, method, mds_model, mds_ipmi_cmd, csr_object, section)
-            top_k: Number of results to return (default 10, max 50)
+            query: 自然语言或代码片段查询
+            language: 语言过滤（lua, c, cpp, python, json, markdown）
+            repo: 仓库/组件名过滤（如 "sensor", "libipmi"）
+            chunk_type: 分块类型过滤（function, class, mds_model 等）
+            top_k: 返回结果数量（默认 10，最大 50）
         """
         _, _, engine = _ensure_initialized()
         results = engine.search(
@@ -88,18 +108,20 @@ def create_server(config: AppConfig) -> FastMCP:
             repo=repo,
             chunk_type=chunk_type,
         )
-        return json.dumps([r.to_dict() for r in results], indent=2, ensure_ascii=False)
+        return json.dumps(
+            [r.to_dict() for r in results], indent=2, ensure_ascii=False
+        )
 
     @mcp.tool()
     def find_definitions(
         symbol_name: str,
         language: Optional[str] = None,
     ) -> str:
-        """Find all definitions of a symbol (function, class, variable, interface) across openUBMC.
+        """查找符号定义位置（函数、类、变量、接口）。
 
         Args:
-            symbol_name: The symbol name to search for (e.g., "ThresholdSensor", "init", "get_sensor_data")
-            language: Optional language filter (lua, c, cpp, python, json)
+            symbol_name: 符号名称（如 "ThresholdSensor", "init"）
+            language: 可选的语言过滤
         """
         _, index_mgr, engine = _ensure_initialized()
         results = engine.search(
@@ -109,7 +131,7 @@ def create_server(config: AppConfig) -> FastMCP:
             is_code_query=True,
         )
 
-        # Filter to only definition-like results (functions, classes, mds_models)
+        # 优先返回符号名精确匹配的定义
         definitions = []
         for r in results:
             sym_names = [s.name for s in r.chunk.symbols]
@@ -117,17 +139,16 @@ def create_server(config: AppConfig) -> FastMCP:
                 definitions.append(r.to_dict())
 
         if not definitions:
-            # Fallback: return top results mentioning the symbol
             definitions = [r.to_dict() for r in results[:5]]
 
         return json.dumps(definitions, indent=2, ensure_ascii=False)
 
     @mcp.tool()
     def find_references(symbol_name: str) -> str:
-        """Find all references to a named symbol across the openUBMC codebase.
+        """查找符号的所有引用位置。
 
         Args:
-            symbol_name: The symbol name to search references for
+            symbol_name: 待查找引用的符号名称
         """
         _, _, engine = _ensure_initialized()
         results = engine.search(
@@ -135,14 +156,13 @@ def create_server(config: AppConfig) -> FastMCP:
             top_k=30,
             is_code_query=True,
         )
-        return json.dumps([r.to_dict() for r in results], indent=2, ensure_ascii=False)
+        return json.dumps(
+            [r.to_dict() for r in results], indent=2, ensure_ascii=False
+        )
 
     @mcp.tool()
     def list_components() -> str:
-        """List all openUBMC components discovered in the indexed codebase.
-
-        Returns component name, languages, file count, function count, and class count.
-        """
+        """列出所有已索引的 openUBMC 组件及其统计信息。"""
         _, index_mgr, _ = _ensure_initialized()
         from collections import defaultdict
 
@@ -176,12 +196,12 @@ def create_server(config: AppConfig) -> FastMCP:
 
     @mcp.tool()
     def get_component_deps(component_name: str) -> str:
-        """Get dependencies and interfaces for a specific openUBMC component.
+        """获取组件的依赖关系、接口、MDS 类和 IPMI 命令。
 
-        Parses service.json for build dependencies and required interfaces.
+        解析 service.json 获取构建依赖和所需接口。
 
         Args:
-            component_name: The component name (e.g., "sensor", "devmon", "vpd")
+            component_name: 组件名称（如 "sensor", "devmon"）
         """
         _, index_mgr, _ = _ensure_initialized()
         chunks = index_mgr.get_all_chunks()
@@ -198,19 +218,15 @@ def create_server(config: AppConfig) -> FastMCP:
         for chunk in chunks:
             if chunk.repo_name != component_name:
                 continue
-
-            # From service.json metadata
             if chunk.chunk_type == "mds_service":
                 deps["dependencies"] = chunk.metadata.get("dependencies", [])
-                deps["required_interfaces"] = chunk.metadata.get("required_interfaces", [])
-
-            # From model.json
+                deps["required_interfaces"] = chunk.metadata.get(
+                    "required_interfaces", []
+                )
             if chunk.chunk_type == "mds_model":
                 mds_class = chunk.metadata.get("mds_class", "")
                 if mds_class:
                     deps["mds_classes"].append(mds_class)
-
-            # From ipmi.json
             if chunk.chunk_type == "mds_ipmi_cmd":
                 for sym in chunk.symbols:
                     if sym.kind == "ipmi_command":
@@ -218,15 +234,16 @@ def create_server(config: AppConfig) -> FastMCP:
 
         return json.dumps(deps, indent=2, ensure_ascii=False)
 
-    # Resources
+    # ---- MCP Resource 端点 ----
+
     @mcp.resource("ubmc://component/{component_name}/info")
     def component_info(component_name: str) -> str:
-        """Get component metadata."""
+        """获取组件的完整元数据。"""
         return get_component_deps(component_name)
 
     @mcp.resource("ubmc://mds/{component_name}/models")
     def mds_models(component_name: str) -> str:
-        """Get MDS model definitions for a component."""
+        """获取组件的 MDS 模型定义。"""
         _, index_mgr, _ = _ensure_initialized()
         models = []
         for chunk in index_mgr.get_all_chunks():
@@ -239,7 +256,7 @@ def create_server(config: AppConfig) -> FastMCP:
 
     @mcp.resource("ubmc://mds/{component_name}/ipmi")
     def mds_ipmi(component_name: str) -> str:
-        """Get IPMI command definitions for a component."""
+        """获取组件的 IPMI 命令定义。"""
         _, index_mgr, _ = _ensure_initialized()
         commands = []
         for chunk in index_mgr.get_all_chunks():

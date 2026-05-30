@@ -1,4 +1,8 @@
-"""LangChain BaseRetriever wrapping openUBMC HybridSearchEngine."""
+"""LangChain BaseRetriever 适配器，封装 HybridSearchEngine。
+
+提供与 LangChain 生态系统兼容的检索器接口，同时支持
+单查询检索和多查询合并检索（用于 LLM 子查询模式）。
+"""
 
 from __future__ import annotations
 
@@ -15,7 +19,14 @@ if TYPE_CHECKING:
 
 
 class UBMCRetriever(BaseRetriever):
-    """Retriever that delegates to our HybridSearchEngine."""
+    """openUBMC 代码检索器，委托 HybridSearchEngine 执行搜索。
+
+    兼容 LangChain 的 BaseRetriever 接口，可无缝接入 LangChain Agent。
+
+    Attributes:
+        top_k: 单次检索返回的最大结果数
+        engine: 底层的混合搜索引擎实例
+    """
 
     top_k: int = 5
     engine: HybridSearchEngine | None = None
@@ -29,6 +40,15 @@ class UBMCRetriever(BaseRetriever):
         *,
         run_manager: CallbackManagerForRetrieverRun,
     ) -> list[Document]:
+        """执行单查询检索，返回 LangChain Document 列表。
+
+        Args:
+            query: 检索查询文本
+            run_manager: LangChain 回调管理器
+
+        Returns:
+            匹配的 Document 列表，元数据包含文件路径、分数等信息
+        """
         if self.engine is None:
             return []
 
@@ -36,7 +56,18 @@ class UBMCRetriever(BaseRetriever):
         return self._results_to_docs(results)
 
     def multi_query_search(self, queries: list[str], top_k: int | None = None) -> list[Document]:
-        """Execute multiple queries and merge deduplicated results."""
+        """执行多查询检索，合并去重后返回结果。
+
+        对多个子查询分别检索，按 chunk_id 去重并保留最高分数，
+        最终按分数降序排列。
+
+        Args:
+            queries: 子查询文本列表
+            top_k: 返回的最大结果数
+
+        Returns:
+            合并去重后的 Document 列表
+        """
         if self.engine is None:
             return []
 
@@ -57,6 +88,7 @@ class UBMCRetriever(BaseRetriever):
 
     @staticmethod
     def _results_to_docs(results) -> list[Document]:
+        """将 SearchResult 列表转换为 LangChain Document 列表。"""
         docs = []
         for r in results:
             d = r.to_dict()
@@ -76,7 +108,17 @@ class UBMCRetriever(BaseRetriever):
 
 
 def create_retriever(config: AppConfig) -> UBMCRetriever:
-    """Load index and create a configured retriever."""
+    """加载索引并创建配置好的检索器实例。
+
+    Args:
+        config: 应用配置
+
+    Returns:
+        初始化完成的 UBMCRetriever 实例
+
+    Raises:
+        RuntimeError: 索引不存在时抛出
+    """
     from ubmc_rag.indexing.index_manager import IndexManager
 
     index_mgr = IndexManager(config)

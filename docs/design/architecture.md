@@ -4,26 +4,28 @@
 
 openUBMC 是华为开源的 BMC（Baseboard Management Controller）管理软件，采用微组件架构，代码托管在 GitCode。项目涉及 11+ 核心组件，主要语言为 Lua（业务逻辑）、C/C++（驱动）、Python（构建工具），配合大量 JSON 配置文件（MDS 模型、CSR 设备描述、IPMI 命令定义）。
 
-**目标**：借鉴 SourceGraph 的核心思想（精确关键词索引、符号提取、排名算法），构建一个免费的、自托管的代码 RAG 系统，通过 MCP Server + CLI 工具实现快速代码检索。
+**目标**：借鉴 SourceGraph 的核心思想（精确关键词索引、符号提取、排名算法），构建一个免费的、自托管的代码 RAG 系统，通过 MCP Server + CLI + 交互式 Chat 实现快速代码检索与问答。
 
 ## 2. 整体架构
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                        用户接入层                                │
-│  ┌──────────────┐              ┌──────────────────────────┐     │
-│  │  CLI 工具     │              │  MCP Server (FastMCP)    │     │
-│  │  (Typer)     │              │  search_code             │     │
-│  │              │              │  find_definitions         │     │
-│  │  index       │              │  find_references          │     │
-│  │  search      │              │  list_components          │     │
-│  │  components  │              │  get_component_deps       │     │
-│  │  serve       │              │  + 3 Resources            │     │
-│  └──────┬───────┘              └──────────┬───────────────┘     │
-│         │                                  │                    │
-└─────────┼──────────────────────────────────┼────────────────────┘
-          │                                  │
-          ▼                                  ▼
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐  │
+│  │  CLI 工具     │  │ 交互式 Chat   │  │  MCP Server (FastMCP) │  │
+│  │  (Typer)     │  │ (ReAct Agent) │  │  search_code          │  │
+│  │              │  │              │  │  find_definitions      │  │
+│  │  version     │  │  LangChain   │  │  find_references       │  │
+│  │  index       │  │  DashScope   │  │  list_components       │  │
+│  │  search      │  │  Qwen LLM   │  │  get_component_deps    │  │
+│  │  components  │  │  5 RAG Tools │  │  + 3 Resources         │  │
+│  │  serve       │  │  多轮对话     │  │                        │  │
+│  │  chat        │  │  引用溯源     │  │                        │  │
+│  └──────┬───────┘  └──────┬───────┘  └──────────┬────────────┘  │
+│         │                 │                      │               │
+└─────────┼─────────────────┼──────────────────────┼───────────────┘
+          │                 │                      │
+          ▼                 ▼                      ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                       混合搜索引擎                               │
 │  ┌────────────────┐  ┌─────────────┐  ┌───────────────────┐    │
@@ -39,9 +41,9 @@ openUBMC 是华为开源的 BMC（Baseboard Management Controller）管理软件
 │  BM25 稀疏索引     │  │  Dense 向量索引    │
 │  (rank_bm25)      │  │  (ChromaDB/HNSW)  │
 │                   │  │                   │
-│  代码感知分词器     │  │  jina-embeddings- │
-│  camelCase 拆分   │  │  v2-base-code     │
-│  snake_case 拆分  │  │  768 维 / 8K ctx  │
+│  代码感知分词器     │  │  DashScope         │
+│  camelCase 拆分   │  │  text-embedding-v4 │
+│  snake_case 拆分  │  │  1024 维            │
 │  精确符号匹配      │  │  语义相似度        │
 └─────────┬─────────┘  └────────┬──────────┘
           │                      │
@@ -116,10 +118,11 @@ CodeChunk → Embedder → ChromaDB (HNSW 余弦相似度)
 ```
 
 **Embedder**：
-- 模型：jinaai/jina-embeddings-v2-base-code
-- 768 维向量，8192 token 上下文
-- 支持 30 种语言（含 Lua）
-- 批量编码，normalize_embeddings=True
+- 模型：DashScope text-embedding-v4（OpenAI 兼容接口）
+- 1024 维向量
+- 批量编码（batch_size=10），单文本最长 24000 字符
+- 速率限制：最小 0.1s 间隔
+- 失败重试 1 次，二次失败填充零向量
 
 **VectorStore (ChromaDB)**：
 - 持久化存储到 `data/index/` 目录
@@ -167,10 +170,12 @@ RRF_score(d) = w_bm25 × 1/(k + rank_bm25(d)) + w_dense × 1/(k + rank_dense(d))
 
 | 命令 | 功能 |
 |------|------|
+| `ubmc-rag version` | 显示版本号 |
 | `ubmc-rag index [--repos] [--full-rebuild] [--clone-missing]` | 构建或更新索引 |
-| `ubmc-rag search QUERY [-l lang] [-r repo] [-k N]` | 混合搜索 |
-| `ubmc-rag components [-v]` | 列出组件统计 |
-| `ubmc-rag serve [--transport stdio\|sse]` | 启动 MCP 服务器 |
+| `ubmc-rag search QUERY [-l lang] [-r repo] [-t type] [-k N] [--code] [--format table\|json\|plain]` | 混合搜索 |
+| `ubmc-rag components [-v] [--format table\|json]` | 列出组件统计 |
+| `ubmc-rag serve [--transport stdio\|sse] [--host] [--port]` | 启动 MCP 服务器 |
+| `ubmc-rag chat [--model qwen-plus] [--api-key] [--debug]` | 启动交互式 RAG 对话 |
 
 **MCP Server** (FastMCP)：
 
@@ -186,6 +191,20 @@ MCP 资源：`ubmc://component/{name}/info`、`ubmc://mds/{name}/models`、`ubmc
 
 传输：stdio（Claude Desktop/VS Code）+ SSE（HTTP）
 
+**Chat 模块** (ReAct Agent + LangChain)：
+
+基于 LangChain 的 ReAct Agent 架构，LLM 自主决策何时调用检索工具，支持多轮对话。
+
+| 组件 | 功能 |
+|------|------|
+| `chain.py` | Agent 主循环，DashScope Qwen LLM 接入，对话历史管理（max 40 轮），调试追踪 |
+| `tools.py` | 5 个 LangChain @tool 工具，映射搜索引擎能力，结果标注 `[Source N]` 引用 |
+| `retriever.py` | `UBMCRetriever` (LangChain BaseRetriever)，支持单查询和多查询合并检索 |
+
+- System Prompt 强制引用溯源，回答必须附带 `[Source N]` 标记
+- 历史裁剪：超出 40 条时截断，ToolMessage 内容截断至 2000 字符
+- 调试模式：Rich 面板展示完整 Agent 推理轨迹
+
 ## 4. 数据模型
 
 ```
@@ -197,13 +216,30 @@ CodeChunk
 ├── language: str (lua/c/cpp/python/json/markdown)
 ├── component_name: str
 ├── start_line / end_line: int
-├── chunk_type: str (function/method/class/mds_model/mds_ipmi_cmd/csr_object/section/...)
+├── chunk_type: str (function/method/class/mds_model/mds_ipmi_cmd/mds_service/
+│                  mds_type_def/csr_object/csr_topology/section/file/block/
+│                  config_block/typedef)
 ├── symbols: list[Symbol]
 │   ├── name: str
-│   ├── kind: str (function/class/method/variable/interface/ipmi_command)
+│   ├── kind: str (function/class/method/variable/interface/ipmi_command/
+│   │              dependency/section)
 │   ├── line_start / line_end: int
+│   ├── language: str
 │   └── signature: str | None
-└── metadata: dict (mds_class, dependencies, netfn, cmd, ...)
+├── metadata: dict (mds_class, dependencies, netfn, cmd, ...)
+└── embedding: list[float] | None (索引后清除)
+
+SearchResult
+├── chunk: CodeChunk
+├── score: float
+└── source: str ("bm25"/"dense"/"hybrid")
+
+ComponentInfo
+├── name, repo_name, language, description
+├── file_count, function_count, class_count
+├── dependencies, required_interfaces, provided_interfaces
+├── ipmi_commands, mds_classes
+└── to_dict() → JSON 序列化
 ```
 
 ## 5. 数据流
@@ -216,22 +252,50 @@ CodeChunk
    CodeChunk[] ──Embedder──▶ 含 embedding 的 CodeChunk[]
    CodeChunk[] ──IndexManager──▶ ChromaDB + BM25 双索引
 
-2. 查询阶段:
+2. 搜索阶段:
    用户查询 ──QueryProcessor──▶ ProcessedQuery (分类+过滤+关键词)
    ProcessedQuery ──┬──Dense Search──▶ 向量相似度排序
                    └──BM25 Search──▶ 关键词匹配排序
    双路结果 ──RRF 融合──▶ 统一排序
    统一排序 ──Reranker──▶ 最终结果 (boost + diversity)
    最终结果 ──CLI/MCP──▶ 用户
+
+3. 对话阶段:
+   用户提问 ──ReAct Agent──▶ LLM 自主决策
+   Agent ──Tool Call──▶ search_code / find_definitions / find_references / ...
+   检索结果 ──LLM 推理──▶ 引用溯源回答 [Source N]
+   多轮对话 ──历史管理──▶ 上下文窗口内持续对话
 ```
 
-## 6. 技术选型依据
+## 6. 配置管理
+
+基于 Pydantic V2 的分层配置系统，YAML 文件驱动。
+
+| 配置类 | 管控范围 | 关键参数 |
+|--------|----------|----------|
+| `GitConfig` | 仓库同步 | base_url, clone_dir, branch, auth_token, repos |
+| `IngestionConfig` | 数据摄取 | languages（扩展名/启用状态/模式）, exclude_paths, chunk 大小限制 |
+| `IndexingConfig` | 索引构建 | persist_dir, embedding_provider, embedding_dim(1024), BM25 参数 |
+| `SearchConfig` | 搜索调优 | RRF k/权重, top_k, boost 因子, diversity 限制 |
+| `MCPConfig` | 服务部署 | transport, host, port |
+
+默认配置文件 `config/default_config.yaml`，通过 `AppConfig.from_yaml()` 加载，自动读取 `.env` 环境变量。
+
+## 7. 辅助模块
+
+- **logging.py**：基于 Rich Handler 的日志系统，`setup_logging(level)` + `get_logger(name)`
+- **paths.py**：数据目录解析 `resolve_data_dir()`，目录创建 `ensure_dir()`
+
+## 8. 技术选型依据
 
 | 选择 | 替代方案 | 选择理由 |
 |------|----------|----------|
 | ChromaDB | Qdrant, Milvus, FAISS | Python 原生，轻量，快速原型，适合中小规模 |
-| Jina Code V2 | CodeBERT, UniXcoder | 8K 上下文（vs 512），支持 Lua，Apache 2.0 |
+| DashScope text-embedding-v4 | Jina Code V2, CodeBERT | 国内 API 无需翻墙，1024 维精度高，OpenAI 兼容接口 |
 | Tree-sitter | 正则、ctags | AST 精确分块，召回率 +4.3%，多语言统一接口 |
 | RRF 融合 | 线性组合、ConvexCE | Rank-based 不受分数尺度影响，无需归一化 |
 | FastMCP | 原始 MCP SDK | 装饰器 API 减少样板代码，PyPI 包含在 mcp 中 |
 | rank_bm25 | Whoosh, Elasticsearch | 纯 Python，轻量，可自定义分词器 |
+| LangChain ReAct Agent | 原生 Prompt, LangGraph | 成熟的 Agent 框架，工具调用标准化，对话历史管理 |
+| DashScope Qwen (qwen-plus) | OpenAI GPT, Claude API | 国内访问稳定，中文能力强，OpenAI 兼容协议 |
+| Pydantic V2 | dataclasses, attrs | 配置验证，YAML 反序列化，类型安全 |

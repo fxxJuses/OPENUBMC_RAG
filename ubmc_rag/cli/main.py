@@ -1,4 +1,8 @@
-"""CLI entry point and command registration."""
+"""CLI 入口点和命令注册。
+
+使用 Typer 框架构建命令行应用，注册所有子命令：
+index, search, components, serve, chat。
+"""
 
 from __future__ import annotations
 
@@ -13,12 +17,12 @@ app = typer.Typer(
 
 @app.command()
 def version():
-    """Show version."""
+    """显示当前版本号。"""
     from ubmc_rag import __version__
     typer.echo(f"ubmc-rag {__version__}")
 
 
-# Register sub-commands
+# 注册子命令
 from ubmc_rag.cli.index_cmd import register as register_index  # noqa: E402
 from ubmc_rag.cli.search_cmd import register as register_search  # noqa: E402
 from ubmc_rag.cli.components_cmd import register as register_components  # noqa: E402
@@ -31,6 +35,9 @@ register_components(app)
 register_serve(app)
 register_chat(app)
 
+# 注册评估命令
+from evaluation.eval_cmd import register as register_eval  # noqa: E402
+register_eval(app)
 
 if __name__ == "__main__":
     app()

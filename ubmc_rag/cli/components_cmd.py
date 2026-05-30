@@ -1,10 +1,13 @@
-"""CLI components command — list indexed components and their info."""
+"""CLI 命令：ubmc-rag components —— 列出已索引的组件。
+
+聚合索引数据，按组件展示文件数量、函数数量、类数量等统计信息。
+支持表格和 JSON 两种输出格式。
+"""
 
 from __future__ import annotations
 
 import json
 from collections import defaultdict
-from typing import Optional
 
 import typer
 from rich.console import Console
@@ -19,24 +22,35 @@ console = Console()
 
 
 def register(app: typer.Typer):
+    """注册 components 子命令到 Typer 应用。"""
+
     @app.command()
     def components(
-        config_path: str = typer.Option("config/default_config.yaml", "--config", "-c"),
-        verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed stats"),
-        format: str = typer.Option("table", "--format", "-f", help="Output format: table, json"),
+        config_path: str = typer.Option(
+            "config/default_config.yaml", "--config", "-c",
+        ),
+        verbose: bool = typer.Option(
+            False, "--verbose", "-v", help="显示详细统计（含符号列表）",
+        ),
+        format: str = typer.Option(
+            "table", "--format", "-f",
+            help="输出格式: table, json",
+        ),
     ):
-        """List indexed openUBMC components."""
+        """列出已索引的 openUBMC 微组件。"""
         setup_logging("WARNING")
         config = AppConfig.from_yaml(config_path)
 
         index_mgr = IndexManager(config)
         if not index_mgr.load_index():
-            console.print("[red]No index found. Run 'ubmc-rag index' first.[/red]")
+            console.print(
+                "[red]No index found. Run 'ubmc-rag index' first.[/red]"
+            )
             raise typer.Exit(1)
 
         chunks = index_mgr.get_all_chunks()
 
-        # Aggregate by component
+        # 按组件聚合统计
         comp_data: dict[str, dict] = defaultdict(lambda: {
             "files": set(), "functions": 0, "classes": 0,
             "languages": set(), "symbols": [],
@@ -66,8 +80,12 @@ def register(app: typer.Typer):
             )
             components.append(info)
 
+        # 按格式输出
         if format == "json":
-            print(json.dumps([c.to_dict() for c in components], indent=2, ensure_ascii=False))
+            print(json.dumps(
+                [c.to_dict() for c in components],
+                indent=2, ensure_ascii=False,
+            ))
         else:
             table = Table(title="openUBMC Components")
             table.add_column("Component", style="cyan")
@@ -80,11 +98,17 @@ def register(app: typer.Typer):
                 table.add_column("Top Symbols", max_width=50)
 
             for c in components:
-                row = [c.name, c.language, str(c.file_count), str(c.function_count), str(c.class_count)]
+                row = [
+                    c.name, c.language, str(c.file_count),
+                    str(c.function_count), str(c.class_count),
+                ]
                 if verbose:
                     symbols = comp_data[c.name]["symbols"][:10]
                     row.append(", ".join(symbols))
                 table.add_row(*row)
 
             console.print(table)
-            console.print(f"\nTotal: {len(components)} components, {sum(c.file_count for c in components)} files")
+            total_files = sum(c.file_count for c in components)
+            console.print(
+                f"\nTotal: {len(components)} components, {total_files} files"
+            )

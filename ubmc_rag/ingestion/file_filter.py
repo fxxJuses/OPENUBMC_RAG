@@ -1,4 +1,8 @@
-"""File filtering based on language, extension, and .gitignore rules."""
+"""文件过滤器，根据语言、扩展名和 .gitignore 规则筛选文件。
+
+在仓库遍历时过滤掉不需要处理的文件（如构建产物、测试文件），
+并自动加载仓库的 .gitignore 规则。
+"""
 
 from __future__ import annotations
 
@@ -14,8 +18,17 @@ logger = logging.getLogger(__name__)
 
 
 class FileFilter:
+    """文件过滤器，根据配置和 .gitignore 规则筛选可处理文件。
+
+    维护扩展名到语言标识的映射，并缓存每个仓库的 .gitignore 规则。
+
+    Attributes:
+        config: 应用配置
+    """
+
     def __init__(self, config: AppConfig):
         self.config = config
+        # 构建扩展名 -> 语言标识的映射
         self._ext_lang_map: dict[str, str] = {}
         for lang, lang_conf in config.ingestion.languages.items():
             if lang_conf.enabled:
@@ -23,9 +36,11 @@ class FileFilter:
                     self._ext_lang_map[ext] = lang
 
         self._exclude_patterns = config.ingestion.exclude_paths
+        # 仓库路径 -> .gitignore PathSpec 缓存
         self._gitignore_specs: dict[str, pathspec.PathSpec] = {}
 
     def _load_gitignore(self, repo_path: Path) -> pathspec.PathSpec:
+        """加载并缓存仓库的 .gitignore 规则。"""
         if str(repo_path) not in self._gitignore_specs:
             gitignore = repo_path / ".gitignore"
             patterns = []
@@ -37,18 +52,21 @@ class FileFilter:
         return self._gitignore_specs[str(repo_path)]
 
     def get_language(self, file_path: Path) -> Optional[str]:
-        """Get the language for a file based on its extension."""
+        """根据文件扩展名获取对应的语言标识。"""
         return self._ext_lang_map.get(file_path.suffix.lower())
 
     def is_excluded(self, rel_path: str) -> bool:
-        """Check if a relative path matches exclusion patterns."""
+        """检查相对路径是否匹配排除模式（如 build/, .git/）。"""
         for pattern in self._exclude_patterns:
             if rel_path.startswith(pattern) or f"/{pattern}" in rel_path:
                 return True
         return False
 
     def should_process(self, file_path: Path, repo_path: Path) -> Optional[str]:
-        """Check if a file should be processed. Returns language or None."""
+        """判断文件是否应被处理，返回语言标识或 None。
+
+        综合考虑：排除目录、.gitignore 规则、文件扩展名。
+        """
         rel = str(file_path.relative_to(repo_path))
         if self.is_excluded(rel):
             return None
@@ -60,7 +78,7 @@ class FileFilter:
         return self.get_language(file_path)
 
     def walk_repo(self, repo_path: Path) -> list[tuple[Path, str]]:
-        """Walk a repo and return (file_path, language) pairs for processable files."""
+        """遍历仓库，返回所有可处理文件的 (路径, 语言) 列表。"""
         results = []
         for file_path in repo_path.rglob("*"):
             if not file_path.is_file():

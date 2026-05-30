@@ -1,4 +1,11 @@
-"""ReAct Agent with DashScope Qwen LLM + openUBMC code retrieval tools."""
+"""ReAct Agent 核心模块，使用 DashScope Qwen LLM 驱动 openUBMC 代码检索对话。
+
+实现基于工具调用的 ReAct 推理模式：
+1. LLM 分析用户问题，决定是否需要调用检索工具
+2. 选择合适的工具和查询词进行代码检索
+3. 基于检索结果生成带来源引用的回答
+4. 维护对话历史并支持历史裁剪
+"""
 
 from __future__ import annotations
 
@@ -39,6 +46,15 @@ _AGENT_SYSTEM_PROMPT = """\
 
 
 def create_llm(api_key: str | None = None, model: str = _DEFAULT_MODEL) -> ChatOpenAI:
+    """创建 DashScope Qwen LLM 实例。
+
+    Args:
+        api_key: DashScope API 密钥，为空时从环境变量读取
+        model: 模型名称，默认 "qwen-plus"
+
+    Returns:
+        配置好的 ChatOpenAI 实例
+    """
     return ChatOpenAI(
         model=model,
         api_key=api_key or os.environ.get("DASHSCOPE_API_KEY", ""),
@@ -48,7 +64,10 @@ def create_llm(api_key: str | None = None, model: str = _DEFAULT_MODEL) -> ChatO
 
 
 def _extract_final_answer(messages: list[BaseMessage]) -> str:
-    """Extract the final AI answer from agent output messages."""
+    """从 Agent 输出消息中提取最终 AI 回答。
+
+    从消息列表末尾向前查找第一条不含 tool_calls 的 AIMessage。
+    """
     for msg in reversed(messages):
         if isinstance(msg, AIMessage) and not msg.tool_calls:
             return msg.content or ""
@@ -56,7 +75,10 @@ def _extract_final_answer(messages: list[BaseMessage]) -> str:
 
 
 def _trim_history(messages: list[BaseMessage], max_messages: int = 40) -> list[BaseMessage]:
-    """Trim conversation history, truncating large ToolMessage content."""
+    """裁剪对话历史，截断过长的 ToolMessage 内容以控制上下文长度。
+
+    保留最近 max_messages 条消息，对超过 2000 字符的工具返回内容进行截断。
+    """
     if len(messages) <= max_messages:
         return messages
 
@@ -75,14 +97,18 @@ def _trim_history(messages: list[BaseMessage], max_messages: int = 40) -> list[B
 
 
 def _render_debug_trace(console, new_messages: list[BaseMessage]) -> None:
-    """Render debug trace of agent's tool-calling steps."""
+    """渲染 Agent 工具调用的调试追踪信息。
+
+    展示每一步的工具选择、调用参数、返回结果和最终回答。
+    """
     from rich.panel import Panel
 
     for msg in new_messages:
         if isinstance(msg, AIMessage) and msg.tool_calls:
             for tc in msg.tool_calls:
                 console.print(Panel(
-                    f"[bold]Calling:[/bold] {tc['name']}\n[bold]Args:[/bold] {tc['args']}",
+                    f"[bold]Calling:[/bold] {tc['name']}\n"
+                    f"[bold]Args:[/bold] {tc['args']}",
                     title="[cyan]Agent: Tool Selection[/cyan]",
                     border_style="cyan",
                 ))
@@ -95,7 +121,9 @@ def _render_debug_trace(console, new_messages: list[BaseMessage]) -> None:
                 subtitle=f"[dim]content_length={len(msg.content)}[/dim]",
             ))
         elif isinstance(msg, AIMessage) and not msg.tool_calls:
-            preview = msg.content[:300] + ("..." if len(msg.content or "") > 300 else "")
+            preview = msg.content[:300] + (
+                "..." if len(msg.content or "") > 300 else ""
+            )
             console.print(Panel(
                 f"[bold]Final answer:[/bold]\n{preview}",
                 title="[green]Agent: Final Response[/green]",
@@ -103,8 +131,23 @@ def _render_debug_trace(console, new_messages: list[BaseMessage]) -> None:
             ))
 
 
-def run_chat(config, api_key: str | None = None, model: str = _DEFAULT_MODEL, debug: bool = False) -> None:
-    """Run interactive CLI chat loop with ReAct agent."""
+def run_chat(
+    config,
+    api_key: str | None = None,
+    model: str = _DEFAULT_MODEL,
+    debug: bool = False,
+) -> None:
+    """运行交互式 CLI 对话循环。
+
+    初始化 Agent、加载索引、启动交互式问答循环。
+    每轮对话中 Agent 会根据问题自主决定是否调用工具。
+
+    Args:
+        config: 应用配置
+        api_key: DashScope API 密钥
+        model: LLM 模型名称
+        debug: 是否启用调试模式（显示工具调用追踪）
+    """
     from rich.console import Console
 
     from ubmc_rag.chat.retriever import create_retriever
@@ -113,7 +156,7 @@ def run_chat(config, api_key: str | None = None, model: str = _DEFAULT_MODEL, de
 
     console = Console()
 
-    # Initialize
+    # 初始化检索器和 LLM
     console.print("[bold cyan]Loading index...[/bold cyan]")
     retriever = create_retriever(config)
     llm = create_llm(api_key=api_key, model=model)
@@ -121,6 +164,7 @@ def run_chat(config, api_key: str | None = None, model: str = _DEFAULT_MODEL, de
     index_mgr = IndexManager(config)
     index_mgr.load_index()
 
+    # 创建 Agent
     tools = create_tools(retriever.engine, index_mgr)
     agent = create_agent(
         model=llm,
@@ -129,7 +173,10 @@ def run_chat(config, api_key: str | None = None, model: str = _DEFAULT_MODEL, de
     )
 
     if debug:
-        console.print("[bold yellow]Debug mode ON — Agent tool calls will be traced[/bold yellow]")
+        console.print(
+            "[bold yellow]Debug mode ON — "
+            "Agent tool calls will be traced[/bold yellow]"
+        )
 
     console.print("[bold green]openUBMC Code Assistant ready![/bold green]")
     console.print("Type your question (or 'quit' to exit):\n")
@@ -160,5 +207,5 @@ def run_chat(config, api_key: str | None = None, model: str = _DEFAULT_MODEL, de
         final_answer = _extract_final_answer(new_messages)
         console.print(f"\n{final_answer}\n")
 
-        # Trim history
+        # 裁剪对话历史
         messages = _trim_history(new_messages, max_messages=40)

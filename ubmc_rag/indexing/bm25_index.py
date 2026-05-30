@@ -1,4 +1,9 @@
-"""BM25 keyword index with code-aware tokenizer."""
+"""BM25 关键词索引，使用代码感知的分词器。
+
+基于 rank_bm25 库实现 Okapi BM25 算法，配合专门为代码设计的
+分词器（支持驼峰命名、下划线命名和运算符拆分）。
+支持索引的序列化和反序列化，以便持久化到磁盘。
+"""
 
 from __future__ import annotations
 
@@ -14,31 +19,61 @@ from ubmc_rag.models.code_chunk import CodeChunk
 
 logger = logging.getLogger(__name__)
 
-# Code-aware tokenizer: splits on word boundaries, camelCase, underscores, operators
-_TOKENIZE_RE = re.compile(r"[A-Z]?[a-z]+|[A-Z]+(?=[A-Z][a-z]|\d|\b)|\d+|[a-zA-Z]\w*|[^\s\w]")
+# 代码感知分词正则：识别驼峰命名、下划线命名、数字和运算符
+_TOKENIZE_RE = re.compile(
+    r"[A-Z]?[a-z]+|[A-Z]+(?=[A-Z][a-z]|\d|\b)|\d+|[a-zA-Z]\w*|[^\s\w]"
+)
 
 
 def code_tokenize(text: str) -> list[str]:
-    """Tokenize code text for BM25 indexing."""
+    """对代码文本进行分词，适合 BM25 关键词索引。
+
+    支持驼峰命名拆分（如 getSensorData -> get, sensor, data）、
+    下划线命名保留和运算符提取。过滤长度≤1 的无意义词元。
+
+    Args:
+        text: 待分词的代码文本
+
+    Returns:
+        小写化的词元列表
+    """
     tokens = _TOKENIZE_RE.findall(text)
     return [t.lower() for t in tokens if len(t) > 1]
 
 
 class BM25Index:
+    """BM25 关键词索引，支持构建、搜索和持久化。
+
+    使用 Okapi BM25 算法对代码分块进行关键词匹配，
+    与向量检索互补，共同构成混合搜索系统。
+    """
+
     def __init__(self):
         self._bm25: Optional[BM25Okapi] = None
         self._chunk_ids: list[str] = []
         self._tokenized_corpus: list[list[str]] = []
 
     def build(self, chunks: list[CodeChunk]) -> None:
-        """Build BM25 index from chunks."""
+        """从代码分块列表构建 BM25 索引。
+
+        Args:
+            chunks: 代码分块列表，使用每个分块的 content 字段作为文档
+        """
         self._chunk_ids = [c.chunk_id for c in chunks]
         self._tokenized_corpus = [code_tokenize(c.content) for c in chunks]
         self._bm25 = BM25Okapi(self._tokenized_corpus)
         logger.info("BM25 index built with %d documents", len(chunks))
 
     def search(self, query: str, top_k: int = 50) -> list[tuple[str, float]]:
-        """Search and return (chunk_id, score) pairs."""
+        """执行 BM25 关键词搜索。
+
+        Args:
+            query: 搜索查询文本
+            top_k: 返回的最大结果数
+
+        Returns:
+            (chunk_id, score) 元组列表，按分数降序排列
+        """
         if self._bm25 is None:
             return []
 
@@ -55,10 +90,14 @@ class BM25Index:
         return ranked[:top_k]
 
     def get_chunk_ids(self) -> list[str]:
+        """返回索引中所有分块的 ID 列表。"""
         return list(self._chunk_ids)
 
     def save(self, path: Path) -> None:
-        """Serialize index data to disk."""
+        """将索引数据序列化到磁盘文件。
+
+        保存 chunk_ids 和分词后的语料，BM25 模型参数通过加载时重建。
+        """
         data = {
             "chunk_ids": self._chunk_ids,
             "tokenized_corpus": self._tokenized_corpus,
@@ -67,7 +106,14 @@ class BM25Index:
         logger.info("BM25 index saved to %s", path)
 
     def load(self, path: Path) -> bool:
-        """Load index data from disk."""
+        """从磁盘文件加载索引数据并重建 BM25 模型。
+
+        Args:
+            path: 索引文件路径
+
+        Returns:
+            加载成功返回 True，文件不存在返回 False
+        """
         if not path.exists():
             return False
         data = json.loads(path.read_text(encoding="utf-8"))

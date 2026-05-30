@@ -1,4 +1,4 @@
-"""Entry point for python -m ubmc_rag."""
+"""模块入口点，支持 python -m ubmc_rag 运行。"""
 
 from ubmc_rag.cli.main import app
 

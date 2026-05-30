@@ -1,4 +1,11 @@
-"""LLM-based query analyzer — classifies intent and generates sub-queries for RAG retrieval."""
+"""基于 LLM 的查询分析器，用于分类查询意图并生成子查询。
+
+使用大语言模型分析用户的检索问题，实现：
+1. 意图分类：判断查询属于代码查找、架构理解、关系分析等
+2. 组件识别：提取问题中涉及的 openUBMC 组件名
+3. 子查询生成：为多路检索生成关键词组合形式的子查询
+4. 调试追踪：通过 Rich 面板展示分析过程（可选）
+"""
 
 from __future__ import annotations
 
@@ -58,6 +65,16 @@ sensor, sensor_mgmt, devmon, vpd, frudata, fructrl, bus_tools, libipmi, power_mg
 
 @dataclass
 class AnalyzedQuery:
+    """LLM 分析后的查询结果。
+
+    Attributes:
+        original: 原始查询文本
+        intent: 查询意图分类
+        components: 涉及的组件名称列表
+        sub_queries: 生成的子查询列表（关键词组合）
+        reasoning: LLM 的分析理由
+    """
+
     original: str
     intent: str = "general"
     components: list[str] = field(default_factory=list)
@@ -66,13 +83,28 @@ class AnalyzedQuery:
 
 
 class QueryAnalyzer:
-    """Use LLM to analyze query intent and generate optimal sub-queries."""
+    """基于 LLM 的查询分析器，生成优化的子查询用于多路检索。
+
+    Attributes:
+        llm: LangChain ChatOpenAI 实例
+        console: Rich Console 实例（用于调试输出，可选）
+    """
 
     def __init__(self, llm: ChatOpenAI, console=None):
         self.llm = llm
         self.console = console
 
     def analyze(self, question: str) -> AnalyzedQuery:
+        """分析用户问题，返回意图分类和子查询。
+
+        如果 LLM 分析失败，降级为使用原始问题作为唯一子查询。
+
+        Args:
+            question: 用户输入的问题文本
+
+        Returns:
+            包含意图、组件和子查询的分析结果
+        """
         from rich.panel import Panel
 
         prompt = _ANALYZE_PROMPT.format(question=question)
@@ -81,12 +113,15 @@ class QueryAnalyzer:
             result = self._parse_response(question, response.content)
 
             if self.console:
-                sub_text = "\n".join(f"  {i}. {q}" for i, q in enumerate(result.sub_queries, 1))
+                sub_text = "\n".join(
+                    f"  {i}. {q}" for i, q in enumerate(result.sub_queries, 1)
+                )
                 self.console.print(Panel(
                     f"[bold]Prompt sent to LLM:[/bold]\n{prompt[:200]}...\n\n"
                     f"[bold]LLM raw response:[/bold]\n{response.content}\n\n"
                     f"[bold]Parsed intent:[/bold] {result.intent}\n"
-                    f"[bold]Components:[/bold] {', '.join(result.components) or '-'}\n"
+                    f"[bold]Components:[/bold] "
+                    f"{', '.join(result.components) or '-'}\n"
                     f"[bold]Sub-queries:[/bold]\n{sub_text}\n"
                     f"[bold]Reasoning:[/bold] {result.reasoning}",
                     title="[yellow]Step 2: Query Analysis[/yellow]",
@@ -99,7 +134,11 @@ class QueryAnalyzer:
             return AnalyzedQuery(original=question, sub_queries=[question])
 
     def _parse_response(self, question: str, raw: str) -> AnalyzedQuery:
-        # Strip markdown code fences if present
+        """解析 LLM 返回的 JSON 响应。
+
+        处理可能的 markdown 代码块包裹和格式异常。
+        """
+        # 去除 markdown 代码块标记
         cleaned = re.sub(r"^```(?:json)?\s*", "", raw.strip())
         cleaned = re.sub(r"\s*```$", "", cleaned)
 

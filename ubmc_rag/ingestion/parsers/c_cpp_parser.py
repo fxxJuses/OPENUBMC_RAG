@@ -1,8 +1,11 @@
-"""C/C++ AST parser using Tree-sitter for openUBMC native drivers and libipmi."""
+"""C/C++ AST 解析器，使用 Tree-sitter 解析 openUBMC 原生驱动和 libipmi。
+
+提取函数定义、结构体/类定义和 typedef 定义，
+自动区分 C 和 C++ 文件并使用对应的 Tree-sitter 语法。
+"""
 
 from __future__ import annotations
 
-import uuid
 from pathlib import Path
 
 import tree_sitter_c as tsc
@@ -15,14 +18,24 @@ from ubmc_rag.models.code_chunk import CodeChunk, Symbol
 C_LANGUAGE = Language(tsc.language())
 CPP_LANGUAGE = Language(tscpp.language())
 
+# C++ 文件扩展名集合，用于区分 C 和 C++ 语法
+_CPP_EXTENSIONS = frozenset({".cpp", ".hpp", ".cc", ".cxx"})
+
 
 class CCppParser(BaseParser):
+    """C/C++ 代码解析器，自动检测语言并使用对应语法树。
+
+    根据文件扩展名自动选择 C 或 C++ 的 Tree-sitter 解析器，
+    提取函数、结构体、类和 typedef 作为独立分块。
+    """
+
     def __init__(self):
         self._c_parser = Parser(C_LANGUAGE)
         self._cpp_parser = Parser(CPP_LANGUAGE)
 
     @property
     def language(self) -> str:
+        """返回主语言标识。实际语言由文件扩展名动态决定。"""
         return "c"
 
     @property
@@ -30,10 +43,11 @@ class CCppParser(BaseParser):
         return [".c", ".h", ".cpp", ".hpp", ".cc", ".cxx"]
 
     def _get_language_tag(self, file_path: Path) -> str:
-        ext = file_path.suffix.lower()
-        return "cpp" if ext in (".cpp", ".hpp", ".cc", ".cxx") else "c"
+        """根据文件扩展名确定语言标签。"""
+        return "cpp" if file_path.suffix.lower() in _CPP_EXTENSIONS else "c"
 
     def parse(self, file_path: Path, content: str, repo_name: str) -> list[CodeChunk]:
+        """解析 C/C++ 文件，提取函数、结构体和类型定义。"""
         lang_tag = self._get_language_tag(file_path)
         parser = self._cpp_parser if lang_tag == "cpp" else self._c_parser
         tree = parser.parse(content.encode("utf-8"))
@@ -49,29 +63,42 @@ class CCppParser(BaseParser):
                 continue
 
             if node.type == "function_definition":
-                chunk = self._node_to_chunk(node, source, rel_path, repo_name, lang_tag, "function")
+                symbols = self._extract_symbols(node, source, lang_tag)
+                chunk = self._node_to_chunk(
+                    node, source, rel_path, repo_name, lang_tag, "function",
+                    symbols=symbols,
+                )
                 if chunk:
                     chunks.append(chunk)
                     visited.add(node.id)
 
             elif node.type in ("struct_specifier", "class_specifier"):
-                # Only top-level struct/class (not nested inside typedef already handled)
+                # 跳过 typedef 内嵌套的 struct/class（由 type_definition 统一处理）
                 if node.parent and node.parent.type != "type_definition":
-                    chunk = self._node_to_chunk(node, source, rel_path, repo_name, lang_tag, "class")
+                    symbols = self._extract_symbols(node, source, lang_tag)
+                    chunk = self._node_to_chunk(
+                        node, source, rel_path, repo_name, lang_tag, "class",
+                        symbols=symbols,
+                    )
                     if chunk:
                         chunks.append(chunk)
                         visited.add(node.id)
 
             elif node.type == "type_definition":
-                chunk = self._node_to_chunk(node, source, rel_path, repo_name, lang_tag, "typedef")
+                symbols = self._extract_symbols(node, source, lang_tag)
+                chunk = self._node_to_chunk(
+                    node, source, rel_path, repo_name, lang_tag, "typedef",
+                    symbols=symbols,
+                )
                 if chunk:
                     chunks.append(chunk)
                     visited.add(node.id)
-                    # Mark nested struct as visited
+                    # 标记嵌套的 struct/class 已处理
                     for child in node.children:
                         if child.type in ("struct_specifier", "class_specifier"):
                             visited.add(child.id)
 
+        # 降级：未提取到分块时，整个文件作为一个分块
         if not chunks:
             symbols = self._extract_symbols(tree.root_node, source, lang_tag)
             chunks = [CodeChunk(
@@ -90,6 +117,7 @@ class CCppParser(BaseParser):
         return chunks
 
     def _extract_symbols(self, node: Node, source: bytes, lang_tag: str) -> list[Symbol]:
+        """从 AST 节点中提取函数和结构体/类符号。"""
         symbols = []
         for child in self._walk(node):
             if child.type == "function_definition":
@@ -114,7 +142,7 @@ class CCppParser(BaseParser):
         return symbols
 
     def _get_func_name(self, node: Node, source: bytes) -> str | None:
-        """Extract function name from function_definition."""
+        """从函数定义节点中提取函数名。"""
         for child in node.children:
             if child.type == "function_declarator":
                 for sub in child.children:
@@ -125,65 +153,8 @@ class CCppParser(BaseParser):
         return None
 
     def _get_struct_name(self, node: Node, source: bytes) -> str | None:
+        """从结构体/类定义节点中提取类型名。"""
         for child in node.children:
             if child.type == "type_identifier":
                 return source[child.start_byte:child.end_byte].decode("utf-8")
         return None
-
-    def _get_first_line(self, node: Node, source: bytes) -> str | None:
-        end = source.find(b"\n", node.start_byte)
-        if end == -1:
-            end = node.end_byte
-        sig = source[node.start_byte:end].decode("utf-8", errors="replace").strip()
-        return sig[:200] if sig else None
-
-    def _node_to_chunk(
-        self, node: Node, source: bytes, rel_path: str, repo_name: str,
-        lang_tag: str, chunk_type: str,
-    ) -> CodeChunk | None:
-        text = source[node.start_byte:node.end_byte].decode("utf-8", errors="replace")
-        if not text.strip():
-            return None
-
-        symbols = self._extract_symbols(node, source, lang_tag)
-        return CodeChunk(
-            chunk_id=str(uuid.uuid4()),
-            content=text,
-            file_path=rel_path,
-            repo_name=repo_name,
-            language=lang_tag,
-            component_name=repo_name,
-            start_line=node.start_point[0] + 1,
-            end_line=node.end_point[0] + 1,
-            chunk_type=chunk_type,
-            symbols=symbols,
-        )
-
-    def _split_by_lines(
-        self, content: str, rel_path: str, repo_name: str, lang_tag: str
-    ) -> list[CodeChunk]:
-        lines = content.splitlines()
-        chunk_size = 150
-        overlap = 5
-        chunks = []
-        for i in range(0, len(lines), chunk_size - overlap):
-            end = min(i + chunk_size, len(lines))
-            text = "\n".join(lines[i:end])
-            if text.strip():
-                chunks.append(CodeChunk(
-                    chunk_id=str(uuid.uuid4()),
-                    content=text,
-                    file_path=rel_path,
-                    repo_name=repo_name,
-                    language=lang_tag,
-                    component_name=repo_name,
-                    start_line=i + 1,
-                    end_line=end,
-                    chunk_type="block",
-                ))
-        return chunks
-
-    def _walk(self, node: Node):
-        yield node
-        for child in node.children:
-            yield from self._walk(child)

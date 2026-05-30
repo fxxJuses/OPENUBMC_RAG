@@ -1,4 +1,13 @@
-"""Schema-aware JSON parser for openUBMC MDS models, IPMI commands, and CSR configs."""
+"""Schema 感知的 JSON 解析器，专为 openUBMC MDS 文件格式设计。
+
+识别并分别处理以下 JSON 文件类型：
+- service.json: 组件依赖和接口声明
+- model.json: MDS 数据模型定义
+- ipmi.json: IPMI 命令定义
+- types.json: 类型定义（结构体/枚举）
+- .sr 文件: CSR 设备拓扑和对象配置
+- 通用 JSON: 作为整体分块
+"""
 
 from __future__ import annotations
 
@@ -11,6 +20,12 @@ from ubmc_rag.models.code_chunk import CodeChunk, Symbol
 
 
 class JsonParser(BaseParser):
+    """openUBMC MDS JSON 文件解析器。
+
+    根据文件名和内容结构自动选择解析策略，将每个语义单元
+    （如单个 IPMI 命令、单个模型类）提取为独立的 CodeChunk。
+    """
+
     @property
     def language(self) -> str:
         return "json"
@@ -20,6 +35,7 @@ class JsonParser(BaseParser):
         return [".json", ".sr"]
 
     def parse(self, file_path: Path, content: str, repo_name: str) -> list[CodeChunk]:
+        """解析 JSON 文件，根据文件名分派到对应的解析方法。"""
         rel_path = str(file_path)
         name = file_path.name
 
@@ -30,36 +46,34 @@ class JsonParser(BaseParser):
 
         if name == "service.json":
             return self._parse_service_json(data, content, rel_path, repo_name)
-        elif name == "model.json":
+        if name == "model.json":
             return self._parse_model_json(data, content, rel_path, repo_name)
-        elif name == "ipmi.json":
+        if name == "ipmi.json":
             return self._parse_ipmi_json(data, content, rel_path, repo_name)
-        elif name == "types.json":
+        if name == "types.json":
             return self._parse_types_json(data, content, rel_path, repo_name)
-        elif file_path.suffix == ".sr":
+        if file_path.suffix == ".sr":
             return self._parse_sr_file(data, content, rel_path, repo_name)
-        else:
-            return self._parse_generic_json(data, content, rel_path, repo_name)
+        return self._fallback_chunk(content, rel_path, repo_name)
 
     def _parse_service_json(
         self, data: dict, content: str, rel_path: str, repo_name: str
     ) -> list[CodeChunk]:
-        """Parse MDS service.json — single chunk with dependency/interface metadata."""
+        """解析 MDS service.json —— 整体作为一个分块，提取依赖和接口元数据。"""
         symbols = []
+
+        # 提取依赖项符号
         deps = data.get("dependencies", [])
         if isinstance(deps, list):
             for dep in deps:
-                if isinstance(dep, str):
+                dep_name = dep if isinstance(dep, str) else dep.get("name", "")
+                if dep_name:
                     symbols.append(Symbol(
-                        name=dep, kind="dependency",
-                        line_start=1, line_end=1, language="json",
-                    ))
-                elif isinstance(dep, dict) and "name" in dep:
-                    symbols.append(Symbol(
-                        name=dep["name"], kind="dependency",
+                        name=dep_name, kind="dependency",
                         line_start=1, line_end=1, language="json",
                     ))
 
+        # 提取所需接口符号
         required = data.get("required", [])
         if isinstance(required, list):
             for iface in required:
@@ -93,9 +107,8 @@ class JsonParser(BaseParser):
     def _parse_model_json(
         self, data: dict, content: str, rel_path: str, repo_name: str
     ) -> list[CodeChunk]:
-        """Parse MDS model.json — each top-level class key becomes a chunk."""
+        """解析 MDS model.json —— 每个顶层类定义生成独立分块。"""
         chunks = []
-        # Try to find the classes/models section
         models = data
         if "classes" in data:
             models = data["classes"]
@@ -110,10 +123,9 @@ class JsonParser(BaseParser):
             if not isinstance(class_def, dict):
                 continue
 
-            # Find line range for this class
             start_line, end_line = self._find_json_key_range(lines, class_name)
 
-            # Extract properties as symbols
+            # 将类名和属性提取为符号
             symbols = [Symbol(
                 name=class_name, kind="class",
                 line_start=start_line, line_end=end_line, language="json",
@@ -145,7 +157,7 @@ class JsonParser(BaseParser):
     def _parse_ipmi_json(
         self, data: dict, content: str, rel_path: str, repo_name: str
     ) -> list[CodeChunk]:
-        """Parse MDS ipmi.json — each command under 'cmds' becomes a chunk."""
+        """解析 MDS ipmi.json —— 每条 IPMI 命令生成独立分块。"""
         chunks = []
         cmds = data.get("cmds", data)
 
@@ -163,11 +175,9 @@ class JsonParser(BaseParser):
                 name=cmd_name, kind="ipmi_command",
                 line_start=start_line, line_end=end_line, language="json",
             )]
-            netfn = cmd_def.get("netfn", "")
-            cmd_byte = cmd_def.get("cmd", "")
             metadata = {
-                "netfn": str(netfn),
-                "cmd": str(cmd_byte),
+                "netfn": str(cmd_def.get("netfn", "")),
+                "cmd": str(cmd_def.get("cmd", "")),
             }
 
             chunk_content = json.dumps({cmd_name: cmd_def}, indent=2, ensure_ascii=False)
@@ -190,7 +200,7 @@ class JsonParser(BaseParser):
     def _parse_types_json(
         self, data: dict, content: str, rel_path: str, repo_name: str
     ) -> list[CodeChunk]:
-        """Parse MDS types.json — each struct/enum definition becomes a chunk."""
+        """解析 MDS types.json —— 每个结构体/枚举定义生成独立分块。"""
         chunks = []
         defs = data.get("defs", data)
 
@@ -230,14 +240,17 @@ class JsonParser(BaseParser):
     def _parse_sr_file(
         self, data: dict, content: str, rel_path: str, repo_name: str
     ) -> list[CodeChunk]:
-        """Parse CSR .sr file — extract topology and objects."""
+        """解析 CSR .sr 文件 —— 提取管理拓扑和设备对象。"""
         chunks = []
 
+        # 提取 ManagementTopology 拓扑定义
         if "ManagementTopology" in data:
             topology = data["ManagementTopology"]
             chunks.append(CodeChunk(
                 chunk_id=str(uuid.uuid4()),
-                content=json.dumps({"ManagementTopology": topology}, indent=2, ensure_ascii=False),
+                content=json.dumps(
+                    {"ManagementTopology": topology}, indent=2, ensure_ascii=False
+                ),
                 file_path=rel_path,
                 repo_name=repo_name,
                 language="json",
@@ -245,9 +258,13 @@ class JsonParser(BaseParser):
                 start_line=1,
                 end_line=len(content.splitlines()),
                 chunk_type="csr_topology",
-                symbols=[Symbol(name="ManagementTopology", kind="class", line_start=1, line_end=1, language="json")],
+                symbols=[Symbol(
+                    name="ManagementTopology", kind="class",
+                    line_start=1, line_end=1, language="json",
+                )],
             ))
 
+        # 提取设备对象定义
         objects = data.get("Objects", data.get("objects", {}))
         if isinstance(objects, dict):
             lines = content.splitlines()
@@ -255,7 +272,6 @@ class JsonParser(BaseParser):
                 if not isinstance(obj_def, dict):
                     continue
                 start_line, end_line = self._find_json_key_range(lines, obj_name)
-                # Extract class prefix (e.g., "Eeprom_BCU" -> "Eeprom")
                 class_prefix = obj_name.split("_")[0] if "_" in obj_name else obj_name
 
                 symbols = [Symbol(
@@ -279,13 +295,8 @@ class JsonParser(BaseParser):
 
         return chunks if chunks else self._fallback_chunk(content, rel_path, repo_name)
 
-    def _parse_generic_json(
-        self, data: dict, content: str, rel_path: str, repo_name: str
-    ) -> list[CodeChunk]:
-        """Generic JSON file — single chunk."""
-        return self._fallback_chunk(content, rel_path, repo_name)
-
     def _fallback_chunk(self, content: str, rel_path: str, repo_name: str) -> list[CodeChunk]:
+        """降级处理：将整个文件内容作为单个分块。"""
         return [CodeChunk(
             chunk_id=str(uuid.uuid4()),
             content=content,
@@ -299,14 +310,16 @@ class JsonParser(BaseParser):
         )]
 
     def _find_json_key_range(self, lines: list[str], key: str) -> tuple[int, int]:
-        """Best-effort: find the line range of a JSON key in the file."""
+        """在 JSON 文件中定位指定键的行范围（尽力而为）。
+
+        通过搜索 "key" 字符串并追踪花括号嵌套深度来确定范围。
+        """
         start = 1
         end = len(lines)
         key_pattern = f'"{key}"'
         for i, line in enumerate(lines):
             if key_pattern in line:
                 start = i + 1
-                # Find closing brace
                 depth = 0
                 for j in range(i, len(lines)):
                     depth += lines[j].count("{") - lines[j].count("}")

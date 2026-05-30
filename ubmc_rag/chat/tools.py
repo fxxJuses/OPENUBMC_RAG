@@ -1,4 +1,12 @@
-"""LangChain Tools for openUBMC RAG Agent — wrapping HybridSearchEngine and IndexManager."""
+"""LangChain Agent 工具集，封装 HybridSearchEngine 和 IndexManager 的能力。
+
+定义了 Agent 可调用的工具函数：
+- search_code: 混合语义+关键词代码搜索
+- find_definitions: 符号定义查找
+- find_references: 符号引用查找
+- list_components: 组件列表和统计
+- get_component_deps: 组件依赖分析
+"""
 
 from __future__ import annotations
 
@@ -16,7 +24,11 @@ logger = logging.getLogger(__name__)
 
 
 def _format_results(results) -> str:
-    """Format search results into a human-readable string with source markers."""
+    """将搜索结果格式化为带来源标记的可读文本。
+
+    每条结果标注序号、文件路径、行号范围和分数，
+    Agent 可据此在回答中引用来源。
+    """
     if not results:
         return "No results found."
 
@@ -32,7 +44,15 @@ def _format_results(results) -> str:
 
 
 def create_tools(engine: HybridSearchEngine, index_mgr: IndexManager) -> list:
-    """Create LangChain tools for the RAG agent."""
+    """创建 RAG Agent 可使用的 LangChain 工具列表。
+
+    Args:
+        engine: 混合搜索引擎实例
+        index_mgr: 索引管理器实例
+
+    Returns:
+        LangChain @tool 装饰的工具函数列表
+    """
 
     @tool
     def search_code(
@@ -42,7 +62,8 @@ def create_tools(engine: HybridSearchEngine, index_mgr: IndexManager) -> list:
         chunk_type: Optional[str] = None,
         top_k: int = 8,
     ) -> str:
-        """在 openUBMC 代码库中进行混合语义+关键词搜索。适用于：理解代码逻辑、查找代码片段、探索架构细节。"""
+        """在 openUBMC 代码库中进行混合语义+关键词搜索。
+        适用于：理解代码逻辑、查找代码片段、探索架构细节。"""
         results = engine.search(
             query=query,
             top_k=min(top_k, 50),
@@ -57,13 +78,15 @@ def create_tools(engine: HybridSearchEngine, index_mgr: IndexManager) -> list:
         symbol_name: str,
         language: Optional[str] = None,
     ) -> str:
-        """查找函数、类、变量的定义位置。适用于：需要知道某个符号在哪里定义的。"""
+        """查找函数、类、变量的定义位置。
+        适用于：需要知道某个符号在哪里定义的。"""
         results = engine.search(
             query=symbol_name,
             top_k=20,
             language=language,
             is_code_query=True,
         )
+        # 优先返回符号名精确匹配的结果
         definitions = []
         for r in results:
             sym_names = [s.name for s in r.chunk.symbols]
@@ -77,7 +100,8 @@ def create_tools(engine: HybridSearchEngine, index_mgr: IndexManager) -> list:
 
     @tool
     def find_references(symbol_name: str) -> str:
-        """查找符号的所有引用位置。适用于：需要知道某个函数/类在哪里被调用或使用。"""
+        """查找符号的所有引用位置。
+        适用于：需要知道某个函数/类在哪里被调用或使用。"""
         results = engine.search(
             query=symbol_name,
             top_k=30,
@@ -115,7 +139,8 @@ def create_tools(engine: HybridSearchEngine, index_mgr: IndexManager) -> list:
 
     @tool
     def get_component_deps(component_name: str) -> str:
-        """获取指定组件的依赖关系、接口、MDS 类和 IPMI 命令。适用于：理解组件间的依赖和交互关系。"""
+        """获取指定组件的依赖关系、接口、MDS 类和 IPMI 命令。
+        适用于：理解组件间的依赖和交互关系。"""
         chunks = index_mgr.get_all_chunks()
 
         deps = {
@@ -130,13 +155,18 @@ def create_tools(engine: HybridSearchEngine, index_mgr: IndexManager) -> list:
         for chunk in chunks:
             if chunk.repo_name != component_name:
                 continue
+            # 从 service.json 元数据提取依赖和接口
             if chunk.chunk_type == "mds_service":
                 deps["dependencies"] = chunk.metadata.get("dependencies", [])
-                deps["required_interfaces"] = chunk.metadata.get("required_interfaces", [])
+                deps["required_interfaces"] = chunk.metadata.get(
+                    "required_interfaces", []
+                )
+            # 从 model.json 提取 MDS 类名
             if chunk.chunk_type == "mds_model":
                 mds_class = chunk.metadata.get("mds_class", "")
                 if mds_class:
                     deps["mds_classes"].append(mds_class)
+            # 从 ipmi.json 提取命令名
             if chunk.chunk_type == "mds_ipmi_cmd":
                 for sym in chunk.symbols:
                     if sym.kind == "ipmi_command":

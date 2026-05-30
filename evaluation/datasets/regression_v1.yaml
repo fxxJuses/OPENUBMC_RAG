@@ -1,0 +1,433 @@
+name: regression_v1
+version: "1.0"
+description: >
+  openUBMC Code RAG 检索质量回归测试集。
+  覆盖单函数、单组件、跨组件三类查询，包含精确匹配、语义检索、中英混杂等场景。
+
+test_cases:
+  # ===== 单函数查询 (10 条) =====
+
+  - id: TC-001
+    query: "get_sensor_data"
+    category: single_function
+    query_type: exact_match
+    difficulty: easy
+    expected_files:
+      - repo_name: sensor
+        file_path: "src/lualib/sensor_mdb_object.lua"
+        relevance: 3
+    expected_symbols: ["get_sensor_data"]
+    expected_repos: ["sensor"]
+    description: "精确符号名查找：sensor 组件的数据获取函数"
+
+  - id: TC-002
+    query: "ipmi_get_sensor_reading"
+    category: single_function
+    query_type: exact_match
+    difficulty: easy
+    expected_files:
+      - repo_name: libipmi
+        file_path: "src/ipmb/protocol_ipmb.h"
+        relevance: 3
+    expected_symbols: ["ipmi_get_sensor_reading"]
+    expected_repos: ["libipmi"]
+    description: "C 函数名查找：libipmi 中的传感器读取接口"
+
+  - id: TC-003
+    query: "传感器阈值设置的实现"
+    category: single_function
+    query_type: semantic_match
+    difficulty: normal
+    expected_files:
+      - repo_name: sensor
+        file_path: "src/lualib/sensor_operation.lua"
+        relevance: 3
+      - repo_name: sensor
+        file_path: "src/lualib/sensor_service.lua"
+        relevance: 2
+    expected_symbols: ["set_threshold"]
+    expected_repos: ["sensor"]
+    description: "中文语义查询：传感器阈值设置逻辑"
+
+  - id: TC-004
+    query: "ThresholdSensor MDS model definition"
+    category: single_function
+    query_type: semantic_match
+    difficulty: normal
+    expected_files:
+      - repo_name: sensor
+        file_path: "mds/model.json"
+        relevance: 3
+    expected_symbols: ["ThresholdSensor"]
+    expected_repos: ["sensor"]
+    description: "英文语义查询：MDS 模型类定义查找"
+
+  - id: TC-005
+    query: "sensor_customize 自定义处理"
+    category: single_function
+    query_type: exact_match
+    difficulty: easy
+    expected_files:
+      - repo_name: sensor
+        file_path: "src/lualib/sensor_customize.lua"
+        relevance: 3
+    expected_symbols: ["sensor_customize"]
+    expected_repos: ["sensor"]
+    description: "精确模块名查找：传感器自定义处理模块"
+
+  - id: TC-006
+    query: " fru_dump FRU 信息导出"
+    category: single_function
+    query_type: exact_match
+    difficulty: easy
+    expected_files:
+      - repo_name: frudata
+        file_path: "src/lualib/fru_dump.lua"
+        relevance: 3
+    expected_symbols: ["fru_dump"]
+    expected_repos: ["frudata"]
+    description: "模块名查找：FRU 信息导出功能"
+
+  - id: TC-007
+    query: "SEL event logging function"
+    category: single_function
+    query_type: semantic_match
+    difficulty: normal
+    expected_files:
+      - repo_name: sensor
+        file_path: "src/lualib/sensor_operation.lua"
+        relevance: 2
+    expected_repos: ["sensor"]
+    description: "英文语义查询：SEL 系统事件日志相关功能"
+
+  - id: TC-008
+    query: "psu_service 电源监控"
+    category: single_function
+    query_type: mixed
+    difficulty: normal
+    expected_files:
+      - repo_name: power_mgmt
+        file_path: "src/lualib/psu_service.lua"
+        relevance: 3
+    expected_symbols: ["psu_service"]
+    expected_repos: ["power_mgmt"]
+    description: "中英混杂查询：PSU 电源监控服务"
+
+  - id: TC-009
+    query: "GetSensorReading IPMI command"
+    category: single_function
+    query_type: semantic_match
+    difficulty: normal
+    expected_files:
+      - repo_name: sensor
+        file_path: "mds/ipmi.json"
+        relevance: 3
+    expected_symbols: ["GetSensorReading"]
+    expected_repos: ["sensor"]
+    description: "IPMI 命令定义查找"
+
+  - id: TC-010
+    query: "power_ipmi IPMI 电源控制命令"
+    category: single_function
+    query_type: mixed
+    difficulty: normal
+    expected_files:
+      - repo_name: power_mgmt
+        file_path: "src/lualib/power_ipmi.lua"
+        relevance: 3
+    expected_symbols: ["power_ipmi"]
+    expected_repos: ["power_mgmt"]
+    description: "中英混杂查询：电源管理 IPMI 命令模块"
+
+  # ===== 单组件查询 (10 条) =====
+
+  - id: TC-011
+    query: "sensor 组件的依赖关系"
+    category: single_component
+    query_type: semantic_match
+    difficulty: normal
+    expected_files:
+      - repo_name: sensor
+        file_path: "mds/service.json"
+        relevance: 3
+    expected_repos: ["sensor"]
+    description: "中文查询：sensor 组件的依赖和配置"
+
+  - id: TC-012
+    query: "pcie_device device_loader loading process"
+    category: single_component
+    query_type: semantic_match
+    difficulty: hard
+    expected_files:
+      - repo_name: pcie_device
+        file_path: "src/lualib/biz_topo/device_loader.lua"
+        relevance: 3
+      - repo_name: pcie_device
+        file_path: "src/service/main.lua"
+        relevance: 2
+    expected_repos: ["pcie_device"]
+    description: "英文查询：PCIe 设备加载流程"
+
+  - id: TC-013
+    query: "power_mgmt 电源管理控制逻辑"
+    category: single_component
+    query_type: semantic_match
+    difficulty: normal
+    expected_files:
+      - repo_name: power_mgmt
+        file_path: "src/lualib/power_mgmt_app.lua"
+        relevance: 3
+      - repo_name: power_mgmt
+        file_path: "src/lualib/task_service.lua"
+        relevance: 2
+    expected_repos: ["power_mgmt"]
+    description: "中文查询：电源管理组件的核心控制逻辑"
+
+  - id: TC-014
+    query: "fructrl 上电下电控制逻辑"
+    category: single_component
+    query_type: semantic_match
+    difficulty: normal
+    expected_files:
+      - repo_name: fructrl
+        file_path: "src/lualib/pwr_action.lua"
+        relevance: 3
+      - repo_name: fructrl
+        file_path: "src/lualib/pwr_restore.lua"
+        relevance: 2
+    expected_repos: ["fructrl"]
+    description: "中文查询：FRU 控制上下电管理"
+
+  - id: TC-015
+    query: "libipmi protocol interface"
+    category: single_component
+    query_type: semantic_match
+    difficulty: normal
+    expected_files:
+      - repo_name: libipmi
+        file_path: "include/protocol.h"
+        relevance: 3
+      - repo_name: libipmi
+        file_path: "src/ipmb/protocol_ipmb.h"
+        relevance: 2
+    expected_repos: ["libipmi"]
+    description: "英文查询：libipmi 协议层接口"
+
+  - id: TC-016
+    query: "frudata FRU 数据管理服务"
+    category: single_component
+    query_type: semantic_match
+    difficulty: normal
+    expected_files:
+      - repo_name: frudata
+        file_path: "src/lualib/frudata_service.lua"
+        relevance: 3
+      - repo_name: frudata
+        file_path: "src/lualib/fru_management.lua"
+        relevance: 2
+    expected_repos: ["frudata"]
+    description: "中文查询：FRU 数据管理组件"
+
+  - id: TC-017
+    query: "bios BIOS 管理和升级"
+    category: single_component
+    query_type: semantic_match
+    difficulty: normal
+    expected_files:
+      - repo_name: bios
+        file_path: "src/lualib/bios_app.lua"
+        relevance: 3
+      - repo_name: bios
+        file_path: "src/lualib/bios_def.lua"
+        relevance: 2
+    expected_repos: ["bios"]
+    description: "中文查询：BIOS 管理组件"
+
+  - id: TC-018
+    query: "sensor_database 数据库操作"
+    category: single_component
+    query_type: semantic_match
+    difficulty: normal
+    expected_files:
+      - repo_name: sensor
+        file_path: "src/lualib/sensor_database.lua"
+        relevance: 3
+    expected_repos: ["sensor"]
+    description: "中文查询：sensor 组件的数据库操作模块"
+
+  - id: TC-019
+    query: "devmon device monitoring mechanism"
+    category: single_component
+    query_type: semantic_match
+    difficulty: hard
+    expected_files:
+      - repo_name: devmon
+        file_path: "src/devmon.h"
+        relevance: 3
+    expected_repos: ["devmon"]
+    description: "英文查询：设备监控组件的机制"
+
+  - id: TC-020
+    query: "pcie_device_app PCIe 设备应用入口"
+    category: single_component
+    query_type: exact_match
+    difficulty: easy
+    expected_files:
+      - repo_name: pcie_device
+        file_path: "src/lualib/pcie_device_app.lua"
+        relevance: 3
+    expected_symbols: ["pcie_device_app"]
+    expected_repos: ["pcie_device"]
+    description: "精确查找：PCIe 设备应用主模块"
+
+  # ===== 跨组件查询 (10 条) =====
+
+  - id: TC-021
+    query: "sensor 和 power_mgmt 之间的关系"
+    category: cross_component
+    query_type: semantic_match
+    difficulty: hard
+    expected_files:
+      - repo_name: sensor
+        file_path: "src/lualib/sensor_service.lua"
+        relevance: 3
+      - repo_name: power_mgmt
+        file_path: "src/lualib/psu_service.lua"
+        relevance: 2
+    expected_repos: ["sensor", "power_mgmt"]
+    description: "中文查询：传感器与电源管理的交互关系"
+
+  - id: TC-022
+    query: "sensor fructrl FRU dependency"
+    category: cross_component
+    query_type: semantic_match
+    difficulty: hard
+    expected_files:
+      - repo_name: sensor
+        file_path: "mds/service.json"
+        relevance: 3
+      - repo_name: fructrl
+        file_path: "src/lualib/pwr_action.lua"
+        relevance: 2
+    expected_repos: ["sensor", "fructrl"]
+    description: "英文查询：sensor 依赖 fructrl 进行 FRU 控制"
+
+  - id: TC-023
+    query: "pcie_device bios 关系 bios_app"
+    category: cross_component
+    query_type: mixed
+    difficulty: hard
+    expected_files:
+      - repo_name: pcie_device
+        file_path: "src/lualib/pcie_device_app.lua"
+        relevance: 3
+      - repo_name: bios
+        file_path: "src/lualib/bios_app.lua"
+        relevance: 2
+    expected_repos: ["pcie_device", "bios"]
+    description: "中英混杂：PCIe 设备与 BIOS 的交互"
+
+  - id: TC-024
+    query: "libipmi IPMI command execution in sensor"
+    category: cross_component
+    query_type: semantic_match
+    difficulty: hard
+    expected_files:
+      - repo_name: libipmi
+        file_path: "src/ipmb/protocol_ipmb.h"
+        relevance: 3
+      - repo_name: sensor
+        file_path: "src/lualib/sensor_operation.lua"
+        relevance: 2
+    expected_repos: ["libipmi", "sensor"]
+    description: "英文查询：sensor 如何使用 libipmi 发送 IPMI 命令"
+
+  - id: TC-025
+    query: "frudata fructrl FRU 数据流"
+    category: cross_component
+    query_type: semantic_match
+    difficulty: hard
+    expected_files:
+      - repo_name: frudata
+        file_path: "src/lualib/frudata_service.lua"
+        relevance: 3
+      - repo_name: fructrl
+        file_path: "src/lualib/fructrl_obj_mgnt.lua"
+        relevance: 2
+    expected_repos: ["frudata", "fructrl"]
+    description: "中文查询：FRU 数据在 frudata 和 fructrl 间的流转"
+
+  - id: TC-026
+    query: "sensor devmon device sensor event handling"
+    category: cross_component
+    query_type: semantic_match
+    difficulty: hard
+    expected_files:
+      - repo_name: sensor
+        file_path: "src/lualib/sensor_service.lua"
+        relevance: 3
+      - repo_name: devmon
+        file_path: "src/devmon.h"
+        relevance: 2
+    expected_repos: ["sensor", "devmon"]
+    description: "英文查询：sensor 和 devmon 设备事件处理交互"
+
+  - id: TC-027
+    query: "bus_tools i2c libipmi communication"
+    category: cross_component
+    query_type: semantic_match
+    difficulty: hard
+    expected_files:
+      - repo_name: bus_tools
+        file_path: "src/i2c_tools/i2cdetect.c"
+        relevance: 3
+      - repo_name: libipmi
+        file_path: "src/ipmb/protocol_ipmb.h"
+        relevance: 2
+    expected_repos: ["bus_tools", "libipmi"]
+    description: "英文查询：I2C 工具与 IPMI 通信的关系"
+
+  - id: TC-028
+    query: "IPMI GetSensorReading 从定义到调用的完整路径"
+    category: cross_component
+    query_type: mixed
+    difficulty: hard
+    expected_files:
+      - repo_name: sensor
+        file_path: "mds/ipmi.json"
+        relevance: 3
+      - repo_name: libipmi
+        file_path: "src/ipmb/protocol_ipmb.h"
+        relevance: 3
+    expected_repos: ["sensor", "libipmi"]
+    description: "中英混杂：IPMI 命令从 MDS 定义到 C 实现的完整路径"
+
+  - id: TC-029
+    query: "ThresholdSensor model to sensor_service usage"
+    category: cross_component
+    query_type: semantic_match
+    difficulty: hard
+    expected_files:
+      - repo_name: sensor
+        file_path: "mds/model.json"
+        relevance: 3
+      - repo_name: sensor
+        file_path: "src/lualib/sensor_service.lua"
+        relevance: 2
+    expected_repos: ["sensor"]
+    description: "英文查询：ThresholdSensor MDS 模型如何在 service 层使用"
+
+  - id: TC-030
+    query: "power_mgmt circuit_mgmt capacitor_mgmt 电容管理"
+    category: cross_component
+    query_type: mixed
+    difficulty: hard
+    expected_files:
+      - repo_name: power_mgmt
+        file_path: "src/lualib/circuit_mgmt.lua"
+        relevance: 3
+      - repo_name: power_mgmt
+        file_path: "src/lualib/capacitor_mgmt.lua"
+        relevance: 3
+    expected_repos: ["power_mgmt"]
+    description: "中英混杂：电源管理中电路和电容管理的关系"
