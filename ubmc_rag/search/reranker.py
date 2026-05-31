@@ -3,10 +3,13 @@
 
 对混合搜索的初步结果进行二次排序，通过以下策略提升结果质量：
 1. 符号名精确匹配提升
-2. 仓库名匹配提升（新增）
+2. 仓库名匹配提升
 3. 文件路径匹配提升（改进：支持中英文混合）
 4. MDS 模型类名匹配提升
 5. 同文件结果多样性降权（防止同一文件占据过多结果）
+
+迭代3-H3: boost 从乘法改为加法 bonus，bonus 值对标乘法效果（约 1/15 of plan）。
+RRF scores ~0.005-0.02，乘法 1.5x 等效 +0.005-0.008，2.0x 等效 +0.01-0.015。
 """
 
 from __future__ import annotations
@@ -14,12 +17,19 @@ from __future__ import annotations
 from ubmc_rag.config.settings import SearchConfig
 from ubmc_rag.models.search_result import SearchResult
 
+# H3: 加法 bonus 常量（对标乘法 boost 效果，适配 RRF 分值范围）
+SYMBOL_BONUS = 0.008        # 原 symbol_match_boost=1.5, 等效 +0.005-0.008
+FILEPATH_BONUS = 0.006      # 原 filepath_match_boost=1.3, 等效 +0.003-0.005
+REPO_BONUS = 0.006          # 仓库名匹配奖励
+MDS_MODEL_BONUS = 0.012     # 原 mds_model_match_boost=2.0, 等效 +0.01-0.015
+PARTIAL_MULTIPLIER = 0.8    # 部分匹配时 bonus 打折
+
 
 class Reranker:
     """搜索结果重排序器，应用多维度提升规则和多样性过滤。
 
     Attributes:
-        config: 搜索配置，包含各提升规则的倍数参数
+        config: 搜索配置，包含各提升规则的参数
     """
 
     def __init__(self, config: SearchConfig):
@@ -29,7 +39,7 @@ class Reranker:
         """对搜索结果应用重排序规则。
 
         处理步骤：
-        1. 应用符号名、仓库名、文件路径、MDS 模型匹配提升
+        1. 应用符号名、仓库名、文件路径、MDS 模型匹配提升（加法 bonus）
         2. 按提升后分数重新排序
         3. 同一文件的重复结果降权（超过 diversity_max_per_file 的结果分数 ×0.7）
 
@@ -56,28 +66,28 @@ class Reranker:
 
         boosted = []
         for r in results:
-            score = r.score
+            bonus = 0.0
 
-            # 1. 符号名精确匹配提升
+            # 1. 符号名精确匹配提升（加法 bonus）
             for sym in r.chunk.symbols:
                 sym_lower = sym.name.lower()
                 if sym_lower in query_lower or any(
                     t in sym_lower for t in query_tokens if len(t) >= 3
                 ):
-                    score *= self.config.symbol_match_boost
+                    bonus += SYMBOL_BONUS
                     break
 
-            # 2. 仓库名匹配提升
+            # 2. 仓库名匹配提升（加法 bonus）
             repo_lower = r.chunk.repo_name.lower()
             if repo_lower in query_lower:
-                score *= self.config.filepath_match_boost
+                bonus += REPO_BONUS
             elif any(token in repo_lower for token in query_tokens if len(token) >= 3):
-                score *= self.config.filepath_match_boost * 0.8  # 部分匹配打 8 折
+                bonus += REPO_BONUS * PARTIAL_MULTIPLIER
 
-            # 3. 文件路径匹配提升
+            # 3. 文件路径匹配提升（加法 bonus）
             file_path_lower = r.chunk.file_path.lower()
             if file_path_lower in query_lower:
-                score *= self.config.filepath_match_boost
+                bonus += FILEPATH_BONUS
             else:
                 # 检查路径中的每个部分是否匹配查询 token
                 path_parts = set()
@@ -86,18 +96,18 @@ class Reranker:
                         path_parts.add(part)
                 matched_parts = sum(1 for p in path_parts if p in query_tokens or p in query_lower)
                 if matched_parts >= 2:
-                    score *= self.config.filepath_match_boost
+                    bonus += FILEPATH_BONUS
                 elif matched_parts == 1:
-                    score *= self.config.filepath_match_boost * 0.8
+                    bonus += FILEPATH_BONUS * PARTIAL_MULTIPLIER
 
-            # 4. MDS 模型类名匹配提升
+            # 4. MDS 模型类名匹配提升（加法 bonus）
             mds_class = r.chunk.metadata.get("mds_class", "")
             if mds_class and mds_class.lower() in query_lower:
-                score *= self.config.mds_model_match_boost
+                bonus += MDS_MODEL_BONUS
 
             boosted.append(SearchResult(
                 chunk=r.chunk,
-                score=score,
+                score=r.score + bonus,
                 source=r.source,
             ))
 
