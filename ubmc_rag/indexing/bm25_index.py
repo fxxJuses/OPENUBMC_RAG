@@ -48,10 +48,12 @@ class BM25Index:
     与向量检索互补，共同构成混合搜索系统。
     """
 
-    def __init__(self):
+    def __init__(self, k1: float = 1.5, b: float = 0.75):
         self._bm25: Optional[BM25Okapi] = None
         self._chunk_ids: list[str] = []
         self._tokenized_corpus: list[list[str]] = []
+        self.k1 = k1
+        self.b = b
 
     def build(self, chunks: list[CodeChunk]) -> None:
         """从代码分块列表构建 BM25 索引。
@@ -61,7 +63,7 @@ class BM25Index:
         """
         self._chunk_ids = [c.chunk_id for c in chunks]
         self._tokenized_corpus = [code_tokenize(c.content) for c in chunks]
-        self._bm25 = BM25Okapi(self._tokenized_corpus)
+        self._bm25 = BM25Okapi(self._tokenized_corpus, k1=self.k1, b=self.b)
         logger.info("BM25 index built with %d documents", len(chunks))
 
     def search(self, query: str, top_k: int = 50) -> list[tuple[str, float]]:
@@ -119,6 +121,6 @@ class BM25Index:
         data = json.loads(path.read_text(encoding="utf-8"))
         self._chunk_ids = data["chunk_ids"]
         self._tokenized_corpus = data["tokenized_corpus"]
-        self._bm25 = BM25Okapi(self._tokenized_corpus)
+        self._bm25 = BM25Okapi(self._tokenized_corpus, k1=self.k1, b=self.b)
         logger.info("BM25 index loaded: %d documents", len(self._chunk_ids))
         return True
