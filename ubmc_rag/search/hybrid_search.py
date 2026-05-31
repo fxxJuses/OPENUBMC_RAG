@@ -113,11 +113,11 @@ class HybridSearchEngine:
         # Dense 向量检索
         query_embedding = self.embedder.embed_query(processed.original)
         dense_results = self.vector_store.search(
-            query_embedding, top_k=top_k * 5, where=where or None,
+            query_embedding, top_k=top_k * 3, where=where or None,
         )
 
         # BM25 关键词检索（使用扩展后的查询以增强关键词覆盖）
-        bm25_results = self.bm25.search(processed.expanded, top_k=top_k * 5)
+        bm25_results = self.bm25.search(processed.expanded, top_k=top_k * 3)
 
         # RRF 融合
         fused = self._rrf_fuse(
