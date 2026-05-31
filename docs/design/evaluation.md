@@ -1,5 +1,7 @@
 # 评估框架设计与现状
 
+> **更新记录**：2026-05-31 完成评估框架 V2 优化，详见 [evaluation-v2-changelog.md](evaluation-v2-changelog.md)。核心变更：修复 6 个 Bug（BM25 返回 0.0、ChromaDB 过滤报错等）、新增 Precision@K/MAP/Bootstrap CI 指标、数据集扩展至 50 条、File@5 从 0.28 提升至 0.44。
+
 ## 概述
 
 评估框架对标日志分析 Agent 平台的 Evals 体系，为 openUBMC Code RAG 系统提供检索质量和 Agent 回答质量的自动化评测能力。
