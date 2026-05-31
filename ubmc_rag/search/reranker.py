@@ -54,6 +54,9 @@ class Reranker:
         for token in re.findall(r'\b[a-zA-Z_]{1,2}\b', query_lower):
             query_tokens.add(token)
 
+        # 提取内容关键词 token（用于 content_keyword_boost，长度 ≥ 2 的词）
+        content_keywords = [w for w in re.findall(r'\w+', query_lower) if len(w) >= 2]
+
         boosted = []
         for r in results:
             score = r.score
@@ -94,6 +97,13 @@ class Reranker:
             mds_class = r.chunk.metadata.get("mds_class", "")
             if mds_class and mds_class.lower() in query_lower:
                 score *= self.config.mds_model_match_boost
+
+            # 5. 内容关键词匹配提升：content 中包含至少 2 个 query 关键词则 boost
+            if content_keywords:
+                content_lower = r.chunk.content.lower()
+                matched_kw = sum(1 for kw in content_keywords if kw in content_lower)
+                if matched_kw >= 2:
+                    score *= self.config.content_keyword_boost
 
             boosted.append(SearchResult(
                 chunk=r.chunk,

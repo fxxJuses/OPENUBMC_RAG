@@ -1,4 +1,5 @@
-"""混合搜索引擎 —— BM25 关键词检索 + Dense 向量检索，通过 RRF 融合。
+"""
+混合搜索引擎 —— BM25 关键词检索 + Dense 向量检索，通过 RRF 融合。
 
 实现双路检索架构：
 1. Dense 路径：通过 DashScope 嵌入模型 + ChromaDB 向量搜索
@@ -28,7 +29,7 @@ class HybridSearchEngine:
     """混合搜索引擎，融合 BM25 和 Dense 双路检索结果。
 
     工作流程：
-    1. QueryProcessor 分析查询意图和提取过滤条件
+    1. QueryProcessor 分析查询意图、提取过滤条件、扩展术语
     2. 分别执行 BM25 和 Dense 检索
     3. RRF 融合两路结果
     4. Reranker 应用提升规则和多样性过滤
@@ -112,11 +113,11 @@ class HybridSearchEngine:
         # Dense 向量检索
         query_embedding = self.embedder.embed_query(processed.original)
         dense_results = self.vector_store.search(
-            query_embedding, top_k=top_k * 3, where=where or None,
+            query_embedding, top_k=top_k * 5, where=where or None,
         )
 
         # BM25 关键词检索（使用扩展后的查询以增强关键词覆盖）
-        bm25_results = self.bm25.search(processed.expanded, top_k=top_k * 3)
+        bm25_results = self.bm25.search(processed.expanded, top_k=top_k * 5)
 
         # RRF 融合
         fused = self._rrf_fuse(

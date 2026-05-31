@@ -175,12 +175,13 @@ class SearchConfig(BaseModel):
     rrf_k: int = 60
     default_top_k: int = 10
     max_top_k: int = 50
-    bm25_weight: float = 0.5
-    dense_weight: float = 0.5
+    bm25_weight: float = 0.60
+    dense_weight: float = 0.40
     code_query_bm25_boost: float = 0.15
     symbol_match_boost: float = 1.5
     filepath_match_boost: float = 1.3
     mds_model_match_boost: float = 2.0
+    content_keyword_boost: float = 1.2
     diversity_max_per_file: int = 3
 
 
