@@ -469,7 +469,7 @@ test_cases:
     difficulty: normal
     expected_files:
       - repo_name: mdb_interface
-        file_path: "mds/service.json"
+        file_path: "include/mdb_interface.h"
         relevance: 3
     expected_repos: ["mdb_interface"]
     description: "中文查询：MDB 接口组件的核心头文件"
@@ -481,7 +481,7 @@ test_cases:
     difficulty: normal
     expected_files:
       - repo_name: vpd
-        file_path: "mds/service.json"
+        file_path: "src/lualib/vpd_service.lua"
         relevance: 3
     expected_repos: ["vpd"]
     description: "中英混杂：VPD 数据管理服务"
@@ -493,7 +493,7 @@ test_cases:
     difficulty: normal
     expected_files:
       - repo_name: sensor_mgmt
-        file_path: "src/main.cpp"
+        file_path: "src/lualib/sensor_mgmt_app.lua"
         relevance: 3
     expected_repos: ["sensor_mgmt"]
     description: "中英混杂：sensor_mgmt 独立管理组件"
@@ -518,7 +518,7 @@ test_cases:
     difficulty: normal
     expected_files:
       - repo_name: bios
-        file_path: "src/lualib/service/upgrade_service.lua"
+        file_path: "src/lualib/bios_upgrade.lua"
         relevance: 3
     expected_repos: ["bios"]
     description: "中文查询：BIOS 升级功能的实现细节"
@@ -560,7 +560,7 @@ test_cases:
     difficulty: hard
     expected_files:
       - repo_name: mdb_interface
-        file_path: "mds/service.json"
+        file_path: "include/mdb_interface.h"
         relevance: 3
       - repo_name: sensor
         file_path: "src/lualib/sensor_mdb_object.lua"
@@ -575,7 +575,7 @@ test_cases:
     difficulty: hard
     expected_files:
       - repo_name: sensor_mgmt
-        file_path: "src/main.cpp"
+        file_path: "src/lualib/sensor_mgmt_app.lua"
         relevance: 3
       - repo_name: sensor
         file_path: "src/lualib/sensor_service.lua"
@@ -590,7 +590,7 @@ test_cases:
     difficulty: hard
     expected_files:
       - repo_name: vpd
-        file_path: "mds/service.json"
+        file_path: "src/lualib/vpd_service.lua"
         relevance: 3
       - repo_name: frudata
         file_path: "src/lualib/frudata_service.lua"
