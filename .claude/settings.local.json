@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find /Users/fan/workspace -maxdepth 2 -name \"*.md\" -path \"*openUBMC*\" -o -name \"*.md\" -path \"*ubmc*\" 2>/dev/null | head -20)",
+      "Read(//Users/fan/workspace/**)",
+      "mcp__zread__get_repo_structure",
+      "mcp__web-search-prime__web_search_prime",
+      "WebSearch",
+      "mcp__web-reader__webReader",
+      "Bash(pip install *)",
+      "Bash(uv --version)",
+      "Bash(python -c \"from ubmc_rag.chat.chain import create_llm, create_rag_chain, run_chat; print\\('chain.py OK'\\)\")",
+      "Bash(python -c \"from ubmc_rag.search.query_analyzer import QueryAnalyzer, AnalyzedQuery; print\\('query_analyzer.py OK'\\)\")",
+      "Bash(python -c \"from ubmc_rag.chat.retriever import UBMCRetriever, create_retriever; print\\('retriever.py OK'\\)\")",
+      "Bash(python3 -c \"from langchain.agents import create_agent; print\\('OK'\\)\")",
+      "Bash(python3 -c \"from langchain.agents import create_agent; help\\(create_agent\\)\")",
+      "Bash(python -c ' *)",
+      "Bash(sqlite3 \"/Users/fan/workspace/Agent/openUBMC_RAG/data/index/chroma.sqlite3\" \".tables\")",
+      "Bash(python3 -m json.tool)",
+      "Bash(sqlite3 \"/Users/fan/workspace/Agent/openUBMC_RAG/data/index/chroma.sqlite3\" \".schema collections\")",
+      "Bash(sqlite3 \"/Users/fan/workspace/Agent/openUBMC_RAG/data/index/chroma.sqlite3\" \".schema embeddings\")",
+      "Bash(sqlite3 \"/Users/fan/workspace/Agent/openUBMC_RAG/data/index/chroma.sqlite3\" \".schema embedding_metadata\")",
+      "Bash(sqlite3 \"/Users/fan/workspace/Agent/openUBMC_RAG/data/index/chroma.sqlite3\" \".schema embedding_fulltext_search\")",
+      "Bash(sqlite3 /Users/fan/workspace/Agent/openUBMC_RAG/data/index/chroma.sqlite3 ' *)",
+      "Bash(sqlite3 -header /Users/fan/workspace/Agent/openUBMC_RAG/data/index/chroma.sqlite3 ' *)",
+      "Bash(python3 -c ' *)"
+    ]
+  }
+}

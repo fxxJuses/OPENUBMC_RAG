@@ -1,10 +1,12 @@
-"""搜索结果重排序器，应用提升规则和多样性过滤。
+"""
+搜索结果重排序器，应用提升规则和多样性过滤。
 
 对混合搜索的初步结果进行二次排序，通过以下策略提升结果质量：
 1. 符号名精确匹配提升
-2. 文件路径匹配提升
-3. MDS 模型类名匹配提升
-4. 同文件结果多样性降权（防止同一文件占据过多结果）
+2. 仓库名匹配提升（新增）
+3. 文件路径匹配提升（改进：支持中英文混合）
+4. MDS 模型类名匹配提升
+5. 同文件结果多样性降权（防止同一文件占据过多结果）
 """
 
 from __future__ import annotations
@@ -27,7 +29,7 @@ class Reranker:
         """对搜索结果应用重排序规则。
 
         处理步骤：
-        1. 应用符号名、文件路径、MDS 模型匹配提升
+        1. 应用符号名、仓库名、文件路径、MDS 模型匹配提升
         2. 按提升后分数重新排序
         3. 同一文件的重复结果降权（超过 diversity_max_per_file 的结果分数 ×0.7）
 
@@ -41,23 +43,54 @@ class Reranker:
         if not results:
             return results
 
+        query_lower = query.lower()
+
+        # 提取查询中的标识符 token（用于精确匹配）
+        query_tokens = set()
+        import re
+        for token in re.findall(r'[a-zA-Z_]\w*', query_lower):
+            query_tokens.add(token)
+        # 也添加短 token（如 "c", "h", "ip" 等可能出现在文件路径中）
+        for token in re.findall(r'\b[a-zA-Z_]{1,2}\b', query_lower):
+            query_tokens.add(token)
+
         boosted = []
         for r in results:
             score = r.score
-            query_lower = query.lower()
 
-            # 符号名精确匹配提升
+            # 1. 符号名精确匹配提升
             for sym in r.chunk.symbols:
-                if sym.name.lower() in query_lower:
+                sym_lower = sym.name.lower()
+                if sym_lower in query_lower or any(
+                    t in sym_lower for t in query_tokens if len(t) >= 3
+                ):
                     score *= self.config.symbol_match_boost
                     break
 
-            # 文件路径匹配提升
-            query_parts = [p for p in query_lower.split() if len(p) > 2]
-            if any(part in r.chunk.file_path.lower() for part in query_parts):
+            # 2. 仓库名匹配提升
+            repo_lower = r.chunk.repo_name.lower()
+            if repo_lower in query_lower:
                 score *= self.config.filepath_match_boost
+            elif any(token in repo_lower for token in query_tokens if len(token) >= 3):
+                score *= self.config.filepath_match_boost * 0.8  # 部分匹配打 8 折
 
-            # MDS 模型类名匹配提升
+            # 3. 文件路径匹配提升
+            file_path_lower = r.chunk.file_path.lower()
+            if file_path_lower in query_lower:
+                score *= self.config.filepath_match_boost
+            else:
+                # 检查路径中的每个部分是否匹配查询 token
+                path_parts = set()
+                for part in re.split(r'[/_.-]', file_path_lower):
+                    if part:
+                        path_parts.add(part)
+                matched_parts = sum(1 for p in path_parts if p in query_tokens or p in query_lower)
+                if matched_parts >= 2:
+                    score *= self.config.filepath_match_boost
+                elif matched_parts == 1:
+                    score *= self.config.filepath_match_boost * 0.8
+
+            # 4. MDS 模型类名匹配提升
             mds_class = r.chunk.metadata.get("mds_class", "")
             if mds_class and mds_class.lower() in query_lower:
                 score *= self.config.mds_model_match_boost
@@ -86,4 +119,6 @@ class Reranker:
             filtered.append(r)
             file_counts[key] = count + 1
 
+        # 终排：按最终分数降序
+        filtered.sort(key=lambda x: x.score, reverse=True)
         return filtered

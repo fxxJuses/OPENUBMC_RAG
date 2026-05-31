@@ -72,7 +72,7 @@ class IndexManager:
         self.bm25.save(bm25_path)
 
         # 分批计算嵌入并写入向量库
-        batch_size = 64
+        batch_size = getattr(self.config.indexing, 'embedding_batch_size', 256) or 256
         for i in range(0, total, batch_size):
             batch = chunks[i:i + batch_size]
 

@@ -115,8 +115,8 @@ class HybridSearchEngine:
             query_embedding, top_k=top_k * 3, where=where or None,
         )
 
-        # BM25 关键词检索
-        bm25_results = self.bm25.search(query, top_k=top_k * 3)
+        # BM25 关键词检索（使用扩展后的查询以增强关键词覆盖）
+        bm25_results = self.bm25.search(processed.expanded, top_k=top_k * 3)
 
         # RRF 融合
         fused = self._rrf_fuse(

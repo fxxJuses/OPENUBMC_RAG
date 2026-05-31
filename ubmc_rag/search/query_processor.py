@@ -1,7 +1,9 @@
-"""查询处理器 —— 分类查询意图并提取过滤条件。
+"""
+查询处理器 —— 分类查询意图、中英术语扩展、提取过滤条件。
 
 分析用户输入的查询文本，判断是否为代码类查询，
-提取语言和分块类型过滤条件，并进行关键词提取和查询清洗。
+提取语言和分块类型过滤条件，进行中英双语技术术语扩展，
+清洗查询以提升嵌入质量。
 """
 
 from __future__ import annotations
@@ -10,45 +12,138 @@ import re
 
 # 代码特征正则：检测运算符、括号、关键字等代码模式
 _CODE_INDICATORS = re.compile(
-    r'[{}()\[\];=<>!&|+\-*/\\]|::|\.\w+\(|'
+    r'[{}()\[\];=<>!&|+\-*/\\\\]|::|\.\w+\(|'
     r'\bfunction\b|\bclass\b|\blocal\b|\breturn\b|\bimport\b|\brequire\b'
 )
 
+# ─────────────────────────────────────────────────────────────────
+# openUBMC 领域中英技术术语双向映射
+# ─────────────────────────────────────────────────────────────────
+
+# 中文 → 英文核心术语映射（按 openUBMC 组件和 BMC 领域）
+_ZH_EN_TERMS: dict[str, str] = {
+    # 组件名
+    "传感器": "sensor",
+    "电源": "power",
+    "风扇": "fan",
+    "温度": "temperature",
+    "电压": "voltage",
+    "内存": "memory",
+    "硬盘": "disk",
+    "板卡": "board",
+    "总线": "bus",
+    # 功能概念
+    "阈值": "threshold",
+    "日志": "sel log",
+    "事件": "event",
+    "热插拔": "hotplug",
+    "上电": "power on",
+    "下电": "power off",
+    "接口": "interface",
+    "数据": "data",
+    "模型": "model",
+    "配置": "config",
+    "服务": "service",
+    "管理": "management mgmt",
+    "监控": "monitor monitoring",
+    "升级": "upgrade",
+    "扫描": "scan detect",
+    "启动": "startup init",
+    "初始化": "initialize init",
+    "依赖": "dependency dep",
+    "关系": "relation",
+    "完整": "full complete",
+    "路径": "path",
+    "链路": "link",
+    "联动": "interaction",
+    "传递": "transfer",
+    "流转": "flow",
+    "触发": "trigger",
+    "控制": "control ctrl",
+    "设备": "device dev",
+    "组件": "component",
+    "定义": "definition def",
+    "命令": "command cmd",
+    "数据流": "dataflow",
+    "对象": "object obj",
+    "应用": "application app",
+    "入口": "entry",
+    "导出": "export dump",
+    "信息": "info",
+    "读取": "read",
+    "写入": "write",
+    "收发": "send receive",
+    "告警": "alert",
+    "实现": "implementation impl",
+    "电容": "capacitor",
+    "电路": "circuit",
+    # FRU 相关
+    "可更换": "fru replaceable",
+    "固件": "firmware",
+    "版本": "version",
+    # IPMI 相关
+    "传感": "sensing",
+    "状态": "status",
+    "协议": "protocol",
+}
+
+# 英文缩写 → 全称/别名映射（用于同义词扩展）
+_EN_SYNONYMS: dict[str, str] = {
+    "mgmt": "management",
+    "mgr": "manager",
+    "ctrl": "control",
+    "dev": "device",
+    "cfg": "config",
+    "svc": "service",
+    "obj": "object",
+    "impl": "implementation",
+    "dep": "dependency",
+    "cmd": "command",
+    "app": "application",
+}
+
 
 class ProcessedQuery:
-    """处理后的查询对象，包含分析结果和过滤条件。
+    """处理后的查询对象，包含分析结果和扩展词。
 
     Attributes:
-        original: 清洗后的查询文本
+        original: 原始查询文本（清洗后，用于 Dense 嵌入）
+        expanded: 扩展后的查询文本（用于 BM25 关键词检索）
         is_code_query: 是否为代码类查询
         keywords: 提取的关键词列表
         filters: 过滤条件字典（如 language, chunk_type）
+        expansion_terms: 扩展出的额外术语列表
     """
 
     def __init__(
         self,
         original: str,
+        expanded: str | None = None,
         is_code_query: bool = False,
         keywords: list[str] | None = None,
         filters: dict | None = None,
+        expansion_terms: list[str] | None = None,
     ):
         self.original = original
+        self.expanded = expanded or original
         self.is_code_query = is_code_query
         self.keywords = keywords or []
         self.filters = filters or {}
+        self.expansion_terms = expansion_terms or []
 
 
 class QueryProcessor:
-    """查询处理器，分析查询意图并提取过滤条件。
+    """查询处理器，分析查询意图、扩展术语并提取过滤条件。
 
     支持：
     - 代码查询检测：通过语法特征判断查询是否为代码片段
     - 语言过滤提取：从查询中识别语言关键词（如 "lua", "c++"）
     - 分块类型提取：识别 "函数"、"模型" 等类型关键词
-    - 查询清洗：移除过滤关键词以提升嵌入质量
+    - 中英技术术语双向扩展：将中文术语映射为英文关键词用于 BM25
+    - 查询清洗：移除纯过滤关键词以提升嵌入质量
     """
 
-    # openUBMC 语言关键词映射（仅用于过滤条件提取，不用于查询清洗）
+    # openUBMC 语言关键词映射
     LANG_KEYWORDS = {
         "lua": ["lua", "luajit"],
         "c": ["c语言", "c code"],
@@ -57,7 +152,7 @@ class QueryProcessor:
         "json": ["json", "mds", "csr", "ipmi", "sr"],
     }
 
-    # 分块类型关键词映射（仅用于过滤条件提取，不用于查询清洗）
+    # 分块类型关键词映射
     CHUNK_TYPE_KEYWORDS = {
         "function": ["函数", "function", "方法", "method"],
         "class": ["类", "class", "class定义"],
@@ -71,29 +166,88 @@ class QueryProcessor:
     _CLEAN_STOPWORDS = {"json", "mds", "csr", "sr"}
 
     def process(self, query: str) -> ProcessedQuery:
-        """处理原始查询，返回包含分析结果的 ProcessedQuery 对象。
+        """处理原始查询，返回包含分析和扩展的 ProcessedQuery 对象。
 
         Args:
             query: 用户输入的原始查询文本
 
         Returns:
-            包含意图分析、过滤条件和关键词的处理后查询
+            包含意图分析、过滤条件、扩展术语和清洗后的查询
         """
         is_code = self._detect_code_query(query)
         filters = self._extract_filters(query)
         keywords = self._extract_keywords(query)
+        expanded_terms = self._expand_query(query)
         cleaned = self._clean_query(query)
+        expanded = self._build_expanded_query(query, expanded_terms)
 
         return ProcessedQuery(
             original=cleaned,
+            expanded=expanded,
             is_code_query=is_code,
             keywords=keywords,
             filters=filters,
+            expansion_terms=expanded_terms,
         )
 
     def _detect_code_query(self, query: str) -> bool:
         """检测查询是否包含代码特征（运算符、括号、编程关键字等）。"""
         return bool(_CODE_INDICATORS.search(query))
+
+    def _has_chinese(self, text: str) -> bool:
+        """检查文本是否包含中文字符。"""
+        return bool(re.search(r'[\u4e00-\u9fff]', text))
+
+    def _expand_query(self, query: str) -> list[str]:
+        """执行中英技术术语双向扩展。
+
+        策略：
+        1. 中文查询 → 将中文技术术语替换为对应英文关键词
+        2. 英文缩写 → 扩展为全称
+        3. 不添加冗余（已有词不重复添加）
+
+        Returns:
+            扩展出的额外术语列表
+        """
+        expanded = set()
+
+        # 步骤 1: 中文 → 英文扩展
+        if self._has_chinese(query):
+            for zh_term, en_terms in _ZH_EN_TERMS.items():
+                if zh_term in query:
+                    for en_word in en_terms.split():
+                        if en_word.lower() not in query.lower():
+                            expanded.add(en_word.lower())
+
+        # 步骤 2: 从查询中提取英文标识符，检查是否需要扩展缩写
+        english_tokens = re.findall(r'[a-zA-Z_]\w*', query)
+        for token in english_tokens:
+            token_lower = token.lower()
+            if token_lower in _EN_SYNONYMS:
+                synonym = _EN_SYNONYMS[token_lower]
+                if synonym.lower() not in query.lower():
+                    expanded.add(synonym.lower())
+
+        # 步骤 3: 反向——如果查询中有英文术语，检查是否应添加中文
+        # （用于 BM25 索引中带中文注释的代码段）
+        for en_term_phrase, zh_term in [
+            ("sensor", "传感器"), ("power", "电源"), ("threshold", "阈值"),
+            ("sel", "日志"), ("event", "事件"), ("hotplug", "热插拔"),
+            ("frudata", "FRU数据"), ("fructrl", "FRU控制"),
+            ("ipmi", "IPMI"), ("pcie", "PCIe"), ("bios", "BIOS"),
+        ]:
+            if en_term_phrase.lower() in query.lower():
+                if zh_term not in query:
+                    expanded.add(zh_term)
+
+        return list(expanded)
+
+    def _build_expanded_query(self, original: str, expansion_terms: list[str]) -> str:
+        """构建扩展后的查询字符串（用于 BM25）。"""
+        if not expansion_terms:
+            return original
+        # 原始查询 + 扩展术语，用空格连接
+        return original + " " + " ".join(expansion_terms)
 
     def _extract_filters(self, query: str) -> dict:
         """从查询中提取语言和分块类型过滤条件。"""
@@ -127,7 +281,7 @@ class QueryProcessor:
             "how", "what", "where", "when", "which", "who", "why",
             "do", "does", "did", "can", "could", "should", "would",
         }
-        words = re.findall(r"[a-zA-Z_]\w*|[一-鿿]+", query)
+        words = re.findall(r"[a-zA-Z_]\w*|[\u4e00-\u9fff]+", query)
         return [w for w in words if w.lower() not in stop_words and len(w) > 1]
 
     def _clean_query(self, query: str) -> str:

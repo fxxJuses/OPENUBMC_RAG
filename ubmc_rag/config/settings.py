@@ -104,10 +104,10 @@ class IngestionConfig(BaseModel):
         "cpp": LanguageConfig(extensions=[".cpp", ".hpp", ".cc", ".cxx"], enabled=True),
         "python": LanguageConfig(extensions=[".py"], enabled=True),
         "json": LanguageConfig(
-            extensions=[".json"],
+            extensions=[".json", ".sr"],
             patterns=[
                 "mds/service.json", "mds/model.json",
-                "mds/ipmi.json", "mds/types.json", "**/*.sr",
+                "mds/ipmi.json", "mds/types.json",
             ],
             enabled=True,
         ),
@@ -175,9 +175,9 @@ class SearchConfig(BaseModel):
     rrf_k: int = 60
     default_top_k: int = 10
     max_top_k: int = 50
-    bm25_weight: float = 0.4
-    dense_weight: float = 0.6
-    code_query_bm25_boost: float = 0.2
+    bm25_weight: float = 0.5
+    dense_weight: float = 0.5
+    code_query_bm25_boost: float = 0.15
     symbol_match_boost: float = 1.5
     filepath_match_boost: float = 1.3
     mds_model_match_boost: float = 2.0

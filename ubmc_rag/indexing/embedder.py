@@ -17,7 +17,7 @@ from ubmc_rag.models.code_chunk import CodeChunk
 logger = logging.getLogger(__name__)
 
 # DashScope API 配置常量
-_API_BATCH_SIZE = 10          # 单次 API 调用最大文本数
+_API_BATCH_SIZE = 25          # 单次 API 调用最大文本数（DashScope 限制）
 _MAX_CHARS = 24000            # 单个文本最大字符数（约 8K tokens）
 _DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 _DASHSCOPE_MODEL = "text-embedding-v4"
