@@ -55,14 +55,31 @@ class BM25Index:
         self.k1 = k1
         self.b = b
 
+    def _build_document(self, chunk: CodeChunk) -> str:
+        """H4: 构建 BM25 文档内容。
+
+        在原代码内容基础上拼接文件路径、仓库名（重复以增加权重）
+        和符号名，使 BM25 可以通过路径/仓库/符号名匹配结果。
+        """
+        parts = [chunk.content]
+        # 文件路径：分词后可匹配文件名和目录名
+        parts.append(chunk.file_path)
+        # 仓库名：重复两次以提高权重
+        parts.append(chunk.repo_name)
+        parts.append(chunk.repo_name)
+        # 符号名（函数名、类名、变量名等）
+        for sym in chunk.symbols:
+            parts.append(sym.name)
+        return " ".join(parts)
+
     def build(self, chunks: list[CodeChunk]) -> None:
         """从代码分块列表构建 BM25 索引。
 
         Args:
-            chunks: 代码分块列表，使用每个分块的 content 字段作为文档
+            chunks: 代码分块列表，使用增强后的文档内容（代码+元数据）
         """
         self._chunk_ids = [c.chunk_id for c in chunks]
-        self._tokenized_corpus = [code_tokenize(c.content) for c in chunks]
+        self._tokenized_corpus = [code_tokenize(self._build_document(c)) for c in chunks]
         self._bm25 = BM25Okapi(self._tokenized_corpus, k1=self.k1, b=self.b)
         logger.info("BM25 index built with %d documents", len(chunks))
 
