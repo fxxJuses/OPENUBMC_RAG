@@ -48,7 +48,7 @@ class QueryProcessor:
     - 查询清洗：移除过滤关键词以提升嵌入质量
     """
 
-    # openUBMC 语言关键词映射
+    # openUBMC 语言关键词映射（仅用于过滤条件提取，不用于查询清洗）
     LANG_KEYWORDS = {
         "lua": ["lua", "luajit"],
         "c": ["c语言", "c code"],
@@ -57,7 +57,7 @@ class QueryProcessor:
         "json": ["json", "mds", "csr", "ipmi", "sr"],
     }
 
-    # 分块类型关键词映射
+    # 分块类型关键词映射（仅用于过滤条件提取，不用于查询清洗）
     CHUNK_TYPE_KEYWORDS = {
         "function": ["函数", "function", "方法", "method"],
         "class": ["类", "class", "class定义"],
@@ -66,6 +66,9 @@ class QueryProcessor:
         "csr_object": ["csr", "设备对象", "device object"],
         "section": ["文档", "document", "文档说明"],
     }
+
+    # 查询清洗时要移除的纯过滤关键词（有歧义的短词不移除）
+    _CLEAN_STOPWORDS = {"json", "mds", "csr", "sr"}
 
     def process(self, query: str) -> ProcessedQuery:
         """处理原始查询，返回包含分析结果的 ProcessedQuery 对象。
@@ -128,15 +131,12 @@ class QueryProcessor:
         return [w for w in words if w.lower() not in stop_words and len(w) > 1]
 
     def _clean_query(self, query: str) -> str:
-        """移除过滤关键词以提升向量嵌入的语义质量。
+        """移除纯过滤关键词以提升向量嵌入的语义质量。
 
-        如果清洗后为空，则返回原始查询。
+        只移除有歧义的短词（如 json、mds），保留有语义价值的词
+        （如 ipmi、function、model），这些词对 embedding 理解查询意图很重要。
         """
         cleaned = query
-        for keywords in self.LANG_KEYWORDS.values():
-            for kw in keywords:
-                cleaned = cleaned.replace(kw, "")
-        for keywords in self.CHUNK_TYPE_KEYWORDS.values():
-            for kw in keywords:
-                cleaned = cleaned.replace(kw, "")
+        for kw in self._CLEAN_STOPWORDS:
+            cleaned = cleaned.replace(kw, "")
         return cleaned.strip() or query

@@ -11,9 +11,9 @@ import typer
 from rich.console import Console
 
 from ubmc_rag.config.settings import AppConfig
+from ubmc_rag.indexing.index_manager import IndexManager
 from ubmc_rag.ingestion.chunker import Chunker
 from ubmc_rag.ingestion.git_sync import GitSync
-from ubmc_rag.indexing.index_manager import IndexManager
 from ubmc_rag.utils.logging import setup_logging
 
 console = Console()

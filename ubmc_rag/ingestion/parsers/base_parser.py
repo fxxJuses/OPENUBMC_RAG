@@ -10,6 +10,7 @@ from __future__ import annotations
 import uuid
 from abc import ABC, abstractmethod
 from pathlib import Path
+
 from tree_sitter import Node
 
 from ubmc_rag.models.code_chunk import CodeChunk

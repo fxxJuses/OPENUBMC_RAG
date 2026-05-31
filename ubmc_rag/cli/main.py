@@ -23,11 +23,11 @@ def version():
 
 
 # 注册子命令
+from ubmc_rag.cli.chat_cmd import register as register_chat  # noqa: E402
+from ubmc_rag.cli.components_cmd import register as register_components  # noqa: E402
 from ubmc_rag.cli.index_cmd import register as register_index  # noqa: E402
 from ubmc_rag.cli.search_cmd import register as register_search  # noqa: E402
-from ubmc_rag.cli.components_cmd import register as register_components  # noqa: E402
 from ubmc_rag.cli.serve_cmd import register as register_serve  # noqa: E402
-from ubmc_rag.cli.chat_cmd import register as register_chat  # noqa: E402
 
 register_index(app)
 register_search(app)
@@ -37,6 +37,7 @@ register_chat(app)
 
 # 注册评估命令
 from evaluation.eval_cmd import register as register_eval  # noqa: E402
+
 register_eval(app)
 
 if __name__ == "__main__":

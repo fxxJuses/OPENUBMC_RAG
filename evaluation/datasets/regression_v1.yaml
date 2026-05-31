@@ -431,3 +431,273 @@ test_cases:
         relevance: 3
     expected_repos: ["power_mgmt"]
     description: "中英混杂：电源管理中电路和电容管理的关系"
+
+  # ===== 补充：边界和异常查询 (8 条) =====
+
+  - id: TC-031
+    query: "init"
+    category: single_function
+    query_type: exact_match
+    difficulty: easy
+    expected_files:
+      - repo_name: sensor
+        file_path: "src/service/main.lua"
+        relevance: 2
+    expected_symbols: ["init"]
+    expected_repos: ["sensor"]
+    description: "超短查询：多义符号名 init，期望命中 sensor 组件"
+
+  - id: TC-032
+    query: "BMC 启动时如何初始化传感器"
+    category: single_component
+    query_type: semantic_match
+    difficulty: hard
+    expected_files:
+      - repo_name: sensor
+        file_path: "src/service/main.lua"
+        relevance: 3
+      - repo_name: sensor
+        file_path: "src/lualib/sensor_service.lua"
+        relevance: 2
+    expected_repos: ["sensor"]
+    description: "纯中文长查询：无关键词，纯语义检索"
+
+  - id: TC-033
+    query: "MDB 接口定义和数据模型"
+    category: single_component
+    query_type: semantic_match
+    difficulty: normal
+    expected_files:
+      - repo_name: mdb_interface
+        file_path: "include/mdb_interface.h"
+        relevance: 3
+    expected_repos: ["mdb_interface"]
+    description: "中文查询：MDB 接口组件的核心头文件"
+
+  - id: TC-034
+    query: "vpd VPD 数据读取"
+    category: single_component
+    query_type: mixed
+    difficulty: normal
+    expected_files:
+      - repo_name: vpd
+        file_path: "src/lualib/vpd_service.lua"
+        relevance: 3
+    expected_repos: ["vpd"]
+    description: "中英混杂：VPD 数据管理服务"
+
+  - id: TC-035
+    query: "sensor_mgmt 传感器管理入口"
+    category: single_component
+    query_type: mixed
+    difficulty: normal
+    expected_files:
+      - repo_name: sensor_mgmt
+        file_path: "src/lualib/sensor_mgmt_app.lua"
+        relevance: 3
+    expected_repos: ["sensor_mgmt"]
+    description: "中英混杂：sensor_mgmt 独立管理组件"
+
+  - id: TC-036
+    query: "fructrl_obj_mgnt FRU 对象管理"
+    category: single_function
+    query_type: exact_match
+    difficulty: easy
+    expected_files:
+      - repo_name: fructrl
+        file_path: "src/lualib/fructrl_obj_mgnt.lua"
+        relevance: 3
+    expected_symbols: ["fructrl_obj_mgnt"]
+    expected_repos: ["fructrl"]
+    description: "精确模块名查找：FRU 对象管理模块"
+
+  - id: TC-037
+    query: "bios_upgrade BIOS 升级流程实现"
+    category: single_function
+    query_type: semantic_match
+    difficulty: normal
+    expected_files:
+      - repo_name: bios
+        file_path: "src/lualib/bios_upgrade.lua"
+        relevance: 3
+    expected_repos: ["bios"]
+    description: "中文查询：BIOS 升级功能的实现细节"
+
+  - id: TC-038
+    query: "i2cdetect I2C 总线扫描"
+    category: single_function
+    query_type: exact_match
+    difficulty: easy
+    expected_files:
+      - repo_name: bus_tools
+        file_path: "src/i2c_tools/i2cdetect.c"
+        relevance: 3
+    expected_symbols: ["i2cdetect"]
+    expected_repos: ["bus_tools"]
+    description: "精确查找：I2C 检测工具 C 实现"
+
+  # ===== 补充：跨组件深度查询 (6 条) =====
+
+  - id: TC-039
+    query: "VPD 数据如何从 frudata 传递到 fructrl"
+    category: cross_component
+    query_type: semantic_match
+    difficulty: hard
+    expected_files:
+      - repo_name: frudata
+        file_path: "src/lualib/frudata_service.lua"
+        relevance: 3
+      - repo_name: fructrl
+        file_path: "src/lualib/fructrl_obj_mgnt.lua"
+        relevance: 2
+    expected_repos: ["frudata", "fructrl"]
+    description: "中文查询：VPD 数据在 frudata 和 fructrl 间的流转"
+
+  - id: TC-040
+    query: "mdb_interface sensor MDS 数据访问链路"
+    category: cross_component
+    query_type: semantic_match
+    difficulty: hard
+    expected_files:
+      - repo_name: mdb_interface
+        file_path: "include/mdb_interface.h"
+        relevance: 3
+      - repo_name: sensor
+        file_path: "src/lualib/sensor_mdb_object.lua"
+        relevance: 2
+    expected_repos: ["mdb_interface", "sensor"]
+    description: "中文查询：sensor 如何通过 MDB 接口访问数据"
+
+  - id: TC-041
+    query: "sensor_mgmt to sensor service delegation"
+    category: cross_component
+    query_type: semantic_match
+    difficulty: hard
+    expected_files:
+      - repo_name: sensor_mgmt
+        file_path: "src/lualib/sensor_mgmt_app.lua"
+        relevance: 3
+      - repo_name: sensor
+        file_path: "src/lualib/sensor_service.lua"
+        relevance: 2
+    expected_repos: ["sensor_mgmt", "sensor"]
+    description: "英文查询：sensor_mgmt 与 sensor 间的委托关系"
+
+  - id: TC-042
+    query: "vpd frudata VPD 原始数据获取"
+    category: cross_component
+    query_type: semantic_match
+    difficulty: hard
+    expected_files:
+      - repo_name: vpd
+        file_path: "src/lualib/vpd_service.lua"
+        relevance: 3
+      - repo_name: frudata
+        file_path: "src/lualib/frudata_service.lua"
+        relevance: 2
+    expected_repos: ["vpd", "frudata"]
+    description: "中文查询：VPD 数据获取与 FRU 数据服务的关系"
+
+  - id: TC-043
+    query: "bios pcie_device PCIe 设备 BIOS 配置联动"
+    category: cross_component
+    query_type: mixed
+    difficulty: hard
+    expected_files:
+      - repo_name: bios
+        file_path: "src/lualib/bios_app.lua"
+        relevance: 3
+      - repo_name: pcie_device
+        file_path: "src/lualib/pcie_device_app.lua"
+        relevance: 2
+    expected_repos: ["bios", "pcie_device"]
+    description: "中英混杂：BIOS 配置与 PCIe 设备的联动"
+
+  - id: TC-044
+    query: "devmon sensor 设备监控与传感器事件"
+    category: cross_component
+    query_type: semantic_match
+    difficulty: hard
+    expected_files:
+      - repo_name: devmon
+        file_path: "src/devmon.h"
+        relevance: 3
+      - repo_name: sensor
+        file_path: "src/lualib/sensor_operation.lua"
+        relevance: 2
+    expected_repos: ["devmon", "sensor"]
+    description: "中文查询：设备监控如何触发传感器事件"
+
+  # ===== 补充：模糊和拼写容错查询 (6 条) =====
+
+  - id: TC-045
+    query: "sensr threshold config"
+    category: single_function
+    query_type: semantic_match
+    difficulty: hard
+    expected_files:
+      - repo_name: sensor
+        file_path: "src/lualib/sensor_operation.lua"
+        relevance: 3
+    expected_repos: ["sensor"]
+    description: "拼写错误查询：sensr 应匹配 sensor 阈值配置"
+
+  - id: TC-046
+    query: "power control on off"
+    category: single_function
+    query_type: semantic_match
+    difficulty: normal
+    expected_files:
+      - repo_name: fructrl
+        file_path: "src/lualib/pwr_action.lua"
+        relevance: 3
+    expected_repos: ["fructrl"]
+    description: "模糊英文查询：上下电控制逻辑"
+
+  - id: TC-047
+    query: "ipmi command send receive"
+    category: single_function
+    query_type: semantic_match
+    difficulty: normal
+    expected_files:
+      - repo_name: libipmi
+        file_path: "src/ipmb/protocol_ipmb.h"
+        relevance: 3
+    expected_repos: ["libipmi"]
+    description: "模糊英文查询：IPMI 命令收发接口"
+
+  - id: TC-048
+    query: "fru info read write"
+    category: single_function
+    query_type: semantic_match
+    difficulty: normal
+    expected_files:
+      - repo_name: frudata
+        file_path: "src/lualib/fru_management.lua"
+        relevance: 3
+    expected_repos: ["frudata"]
+    description: "模糊英文查询：FRU 信息读写"
+
+  - id: TC-049
+    query: "temperature monitoring alert"
+    category: single_function
+    query_type: semantic_match
+    difficulty: hard
+    expected_files:
+      - repo_name: sensor
+        file_path: "src/lualib/sensor_operation.lua"
+        relevance: 3
+    expected_repos: ["sensor"]
+    description: "英文语义查询：温度监控告警（无精确关键词）"
+
+  - id: TC-050
+    query: "component dependency graph"
+    category: cross_component
+    query_type: semantic_match
+    difficulty: hard
+    expected_files:
+      - repo_name: sensor
+        file_path: "mds/service.json"
+        relevance: 2
+    expected_repos: ["sensor"]
+    description: "模糊英文查询：组件依赖图，期望命中 service.json"

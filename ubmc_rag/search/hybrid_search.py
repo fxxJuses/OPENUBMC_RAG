@@ -105,6 +105,10 @@ class HybridSearchEngine:
         elif "chunk_type" in processed.filters:
             where["chunk_type"] = processed.filters["chunk_type"]
 
+        # ChromaDB 多条件过滤需要 $and 操作符
+        if len(where) > 1:
+            where = {"$and": [{k: v} for k, v in where.items()]}
+
         # Dense 向量检索
         query_embedding = self.embedder.embed_query(processed.original)
         dense_results = self.vector_store.search(
@@ -188,16 +192,9 @@ class HybridSearchEngine:
         """从 Dense 检索结果中重建 CodeChunk 对象（分块不在缓存中时的降级方案）。"""
         for item in dense_results:
             if item["chunk_id"] == chunk_id:
-                meta = item["metadata"]
-                return CodeChunk(
+                return CodeChunk.from_chroma_metadata(
                     chunk_id=chunk_id,
                     content=item["content"],
-                    file_path=meta.get("file_path", ""),
-                    repo_name=meta.get("repo_name", ""),
-                    language=meta.get("language", ""),
-                    component_name=meta.get("component_name", ""),
-                    start_line=meta.get("start_line", 0),
-                    end_line=meta.get("end_line", 0),
-                    chunk_type=meta.get("chunk_type", ""),
+                    meta=item["metadata"],
                 )
         return None

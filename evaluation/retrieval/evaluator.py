@@ -202,17 +202,10 @@ class RetrievalEvaluator:
 
     def _reconstruct_from_dense(self, item: dict) -> Optional[CodeChunk]:
         """从 Dense 检索结果重建 CodeChunk。"""
-        meta = item.get("metadata", {})
-        return CodeChunk(
+        return CodeChunk.from_chroma_metadata(
             chunk_id=item.get("chunk_id", ""),
             content=item.get("content", ""),
-            file_path=meta.get("file_path", ""),
-            repo_name=meta.get("repo_name", ""),
-            language=meta.get("language", ""),
-            component_name=meta.get("component_name", ""),
-            start_line=meta.get("start_line", 0),
-            end_line=meta.get("end_line", 0),
-            chunk_type=meta.get("chunk_type", ""),
+            meta=item.get("metadata", {}),
         )
 
     def _reconstruct_from_dense_by_id(

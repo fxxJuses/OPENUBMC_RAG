@@ -11,6 +11,26 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 
+def _parse_symbols_from_metadata(meta: dict) -> list[Symbol]:
+    """从 ChromaDB metadata 恢复 Symbol 列表。
+
+    ChromaDB 不支持 list 类型，symbol_names 以逗号分隔字符串存储。
+    """
+    names = meta.get("symbol_names", "")
+    if not names:
+        return []
+    language = meta.get("language", "")
+    symbols = []
+    for name in names.split(","):
+        name = name.strip()
+        if name:
+            symbols.append(Symbol(
+                name=name, kind="unknown", line_start=0, line_end=0,
+                language=language,
+            ))
+    return symbols
+
+
 @dataclass
 class Symbol:
     """代码符号，表示代码中的一个命名实体。
@@ -73,6 +93,31 @@ class CodeChunk:
     def symbol_names(self) -> list[str]:
         """获取分块中所有符号的名称列表。"""
         return [s.name for s in self.symbols]
+
+    @classmethod
+    def from_chroma_metadata(cls, chunk_id: str, content: str, meta: dict) -> CodeChunk:
+        """从 ChromaDB 存储的元数据字典恢复 CodeChunk。
+
+        Args:
+            chunk_id: 分块唯一标识符
+            content: 分块文本内容
+            meta: ChromaDB metadata 字典
+
+        Returns:
+            重建的 CodeChunk 对象
+        """
+        return cls(
+            chunk_id=chunk_id,
+            content=content,
+            file_path=meta.get("file_path", ""),
+            repo_name=meta.get("repo_name", ""),
+            language=meta.get("language", ""),
+            component_name=meta.get("component_name", ""),
+            start_line=meta.get("start_line", 0),
+            end_line=meta.get("end_line", 0),
+            chunk_type=meta.get("chunk_type", ""),
+            symbols=_parse_symbols_from_metadata(meta),
+        )
 
     def to_chroma_metadata(self) -> dict:
         """将分块转换为 ChromaDB 可存储的元数据字典。

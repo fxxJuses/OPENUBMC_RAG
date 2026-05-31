@@ -70,6 +70,7 @@ class Chunker:
             content = file_path.read_text(encoding="utf-8", errors="replace")
             if not content.strip():
                 return []
+            # 使用相对于仓库根目录的路径，去掉 data/repos/{repo}/ 前缀
             return parser.parse(file_path, content, repo_name)
         except Exception as e:
             logger.warning("Failed to parse %s: %s", file_path, e)
@@ -90,6 +91,13 @@ class Chunker:
 
         for file_path, language in files:
             chunks = self.parse_file(file_path, language, repo_name)
+            # 归一化 file_path：去掉 data/repos/{repo}/ 前缀，只保留相对仓库的路径
+            rel_prefix = f"data/repos/{repo_name}/"
+            for c in chunks:
+                if c.file_path.startswith(rel_prefix):
+                    c.file_path = c.file_path[len(rel_prefix):]
+                elif c.file_path.startswith(str(repo_path)):
+                    c.file_path = str(Path(c.file_path).relative_to(repo_path))
             all_chunks.extend(chunks)
 
         logger.info(

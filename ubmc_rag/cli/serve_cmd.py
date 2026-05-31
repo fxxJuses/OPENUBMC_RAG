@@ -39,8 +39,8 @@ def register(app: typer.Typer):
         """启动 openUBMC Code RAG MCP 服务器。"""
         setup_logging("DEBUG" if verbose else "INFO")
 
-        from ubmc_rag.mcp_server.server import create_server
         from ubmc_rag.config.settings import AppConfig
+        from ubmc_rag.mcp_server.server import create_server
 
         config = AppConfig.from_yaml(config_path)
         config.mcp.transport = transport

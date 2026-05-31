@@ -12,9 +12,9 @@ from __future__ import annotations
 import logging
 import os
 
+from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_openai import ChatOpenAI
-from langchain.agents import create_agent
 
 logger = logging.getLogger(__name__)
 

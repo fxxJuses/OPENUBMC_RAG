@@ -90,10 +90,14 @@ class AgentEvaluator:
     使用与生产环境相同的 Agent 架构处理查询，
     然后用不同的 LLM 进行评分。
 
+    索引在初始化时加载一次，所有用例共享同一引擎实例。
+
     Attributes:
         config: 应用配置
         judge_llm: 评分用 LLM（GLM）
         answer_model: 回答用模型名称（Qwen）
+        index_mgr: 索引管理器（复用）
+        engine: 混合搜索引擎（复用）
     """
 
     def __init__(
@@ -105,6 +109,25 @@ class AgentEvaluator:
         self.config = config
         self.answer_model = answer_model
         self.judge_llm = create_judge_llm(model=judge_model)
+
+        # 加载索引一次，所有用例共享
+        from ubmc_rag.indexing.index_manager import IndexManager
+        from ubmc_rag.search.hybrid_search import HybridSearchEngine
+
+        self.index_mgr = IndexManager(config)
+        loaded = self.index_mgr.load_index()
+        if not loaded:
+            raise RuntimeError("No index found. Run 'ubmc-rag index' first.")
+
+        chunks = self.index_mgr.get_all_chunks()
+        self.engine = HybridSearchEngine(
+            embedder=self.index_mgr.embedder,
+            vector_store=self.index_mgr.vector_store,
+            bm25=self.index_mgr.bm25,
+            config=config,
+        )
+        self.engine.set_chunk_index(chunks)
+        logger.info("AgentEvaluator initialized with %d chunks", len(chunks))
 
     def evaluate_single(
         self,
@@ -197,31 +220,17 @@ class AgentEvaluator:
         return self._aggregate_metrics(results)
 
     def _create_agent(self):
-        """创建 Agent 实例（复用 chat/ 模块的架构）。"""
+        """创建 Agent 实例（复用已加载的索引引擎）。"""
         from langchain.agents import create_agent
 
         from ubmc_rag.chat.chain import _AGENT_SYSTEM_PROMPT, create_llm
         from ubmc_rag.chat.tools import create_tools
-        from ubmc_rag.indexing.index_manager import IndexManager
-        from ubmc_rag.search.hybrid_search import HybridSearchEngine
 
-        index_mgr = IndexManager(self.config)
-        index_mgr.load_index()
-        chunks = index_mgr.get_all_chunks()
-
-        engine = HybridSearchEngine(
-            embedder=index_mgr.embedder,
-            vector_store=index_mgr.vector_store,
-            bm25=index_mgr.bm25,
-            config=self.config,
-        )
-        engine.set_chunk_index(chunks)
-
-        tools = create_tools(engine, index_mgr)
+        tools = create_tools(self.engine, self.index_mgr)
         llm = create_llm(model=self.answer_model)
         agent = create_agent(model=llm, tools=tools, system_prompt=_AGENT_SYSTEM_PROMPT)
 
-        return agent, engine
+        return agent, self.engine
 
     def _extract_answer(self, messages: list) -> str:
         """从 Agent 输出中提取最终回答。"""

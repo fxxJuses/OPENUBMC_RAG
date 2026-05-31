@@ -98,20 +98,40 @@ class IndexManager:
     def load_index(self) -> bool:
         """从磁盘加载现有索引。
 
+        加载 BM25 索引文件，然后从 ChromaDB 恢复分块数据到内存索引，
+        使 get_all_chunks() 和 get_chunk() 可用。
+
         Returns:
             成功加载返回 True，索引不存在返回 False
         """
         bm25_path = Path(self.config.indexing.persist_dir) / "bm25_index.json"
         loaded = self.bm25.load(bm25_path)
 
-        if self.vector_store.count() > 0:
+        chroma_count = self.vector_store.count()
+        if chroma_count > 0:
+            self._load_chunks_from_chroma()
             logger.info(
-                "Loaded existing index: %d chunks in ChromaDB",
-                self.vector_store.count(),
+                "Loaded existing index: %d chunks in ChromaDB, %d in memory",
+                chroma_count, len(self._chunks_index),
             )
             return True
 
         return loaded
+
+    def _load_chunks_from_chroma(self) -> None:
+        """从 ChromaDB 集合中恢复所有分块到内存索引。"""
+        collection = self.vector_store.collection
+        # ChromaDB get() 不带参数会返回所有文档
+        result = collection.get(include=["documents", "metadatas"])
+        if not result["ids"]:
+            return
+
+        for i, chunk_id in enumerate(result["ids"]):
+            meta = result["metadatas"][i] if result["metadatas"] else {}
+            content = result["documents"][i] if result["documents"] else ""
+            self._chunks_index[chunk_id] = CodeChunk.from_chroma_metadata(
+                chunk_id=chunk_id, content=content, meta=meta,
+            )
 
     def get_chunk(self, chunk_id: str) -> Optional[CodeChunk]:
         """根据 ID 获取单个代码分块。"""
