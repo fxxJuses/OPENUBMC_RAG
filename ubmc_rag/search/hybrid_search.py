@@ -127,16 +127,17 @@ class HybridSearchEngine:
             k=search_config.rrf_k,
         )
 
-        # 构建搜索结果
+        # 构建搜索结果（迭代3-fix: 传更多候选给 Reranker，充分利用扩大后的召回池）
+        rerank_candidates = min(top_k * 3, len(fused))
         results = []
-        for chunk_id, score in fused[:top_k]:
+        for chunk_id, score in fused[:rerank_candidates]:
             chunk = self._chunk_cache.get(chunk_id)
             if chunk is None:
                 chunk = self._reconstruct_chunk(chunk_id, dense_results)
             if chunk:
                 results.append(SearchResult(chunk=chunk, score=score, source="hybrid"))
 
-        # 重排序
+        # 重排序（有更多候选可提升低排名但匹配度高的结果）
         results = self.reranker.rerank(results, query)
 
         return results[:top_k]
