@@ -104,14 +104,14 @@ class IngestionConfig(BaseModel):
         "cpp": LanguageConfig(extensions=[".cpp", ".hpp", ".cc", ".cxx"], enabled=True),
         "python": LanguageConfig(extensions=[".py"], enabled=True),
         "json": LanguageConfig(
-            extensions=[".json", ".sr"],
+            extensions=[".json"],
             patterns=[
                 "mds/service.json", "mds/model.json",
                 "mds/ipmi.json", "mds/types.json",
             ],
             enabled=True,
         ),
-        "markdown": LanguageConfig(extensions=[".md"], enabled=True),
+        "markdown": LanguageConfig(extensions=[".md"], enabled=False),
     })
     exclude_paths: list[str] = Field(default_factory=lambda: [
         "build/", "gen/", ".git/", "test/", "tests/",

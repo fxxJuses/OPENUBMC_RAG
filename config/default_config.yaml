@@ -52,7 +52,7 @@ ingestion:
       extensions: [".py"]
       enabled: false
     json:
-      extensions: [".json", ".sr"]
+      extensions: [".json"]
       enabled: true
       patterns:
         - "mds/service.json"
@@ -61,7 +61,7 @@ ingestion:
         - "mds/types.json"
     markdown:
       extensions: [".md"]
-      enabled: true
+      enabled: false
 
   exclude_paths:
     - "build/"
