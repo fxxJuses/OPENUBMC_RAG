@@ -2,6 +2,7 @@
 
 基于 rank_bm25 库实现 Okapi BM25 算法，配合专门为代码设计的
 分词器（支持驼峰命名、下划线命名和运算符拆分）。
+迭代6-P3：增强代码分词 — 领域词典注入、保留原始 token 同时添加拆分后的子 token。
 支持索引的序列化和反序列化，以便持久化到磁盘。
 """
 
@@ -20,25 +21,142 @@ from ubmc_rag.models.code_chunk import CodeChunk
 logger = logging.getLogger(__name__)
 
 # 代码感知分词正则：识别驼峰命名、下划线命名、数字和运算符
+# 迭代6-P3 修复：\b 无法匹配字母→下划线边界（因 _ 是 \w），改用 [^A-Za-z]|$
 _TOKENIZE_RE = re.compile(
-    r"[A-Z]?[a-z]+|[A-Z]+(?=[A-Z][a-z]|\d|\b)|\d+|[a-zA-Z]\w*|[^\s\w]"
+    r"[A-Z]?[a-z]+|[A-Z]+(?=[A-Z][a-z]|\d|[^A-Za-z]|$)|\d+|[a-zA-Z]\w*|[^\s\w]"
 )
 
+# OpenBMC 领域词典：嵌入式固件和 IPMI 协议常用术语
+# 这些术语在 BM25 索引中应保持完整，不被进一步拆分
+_DOMAIN_DICTIONARY: set[str] = {
+    # IPMI 协议相关
+    "ipmi", "sel", "sdr", "pef", "fru", "vpd", "i2c", "smbus", "dbus",
+    # 传感器相关
+    "sensor", "threshold", "discrete", "analog",
+    # 固件相关
+    "firmware", "bios", "bmc", "uefi", "boot", "power", "thermal",
+    # 硬件管理
+    "gpio", "pcie", "nvme", "dimm", "cpu", "psu", "fan", "led",
+    # 事件和日志
+    "event", "alert", "log", "syslog", "redfish",
+    # 常见缩写
+    "api", "cmd", "cfg", "mgr", "ctrl", "util", "info", "data", "dev",
+}
 
-def code_tokenize(text: str) -> list[str]:
+# 领域多词组合：保持完整不被拆分的多词术语（小写）
+_DOMAIN_MULTI_WORD: dict[str, str] = {
+    "ipmi_cmd": "ipmi_cmd",
+    "get_sensor_reading": "get_sensor_reading",
+    "sensor_reading": "sensor_reading",
+    "power_supply": "power_supply",
+    "event_log": "event_log",
+    "sel_event": "sel_event",
+    "sel_info": "sel_info",
+    "sdr_management": "sdr_management",
+    "pef_management": "pef_management",
+    "fru_data": "fru_data",
+    "vpd_data": "vpd_data",
+    "i2c_bus": "i2c_bus",
+    "gpio_pin": "gpio_pin",
+    "d_bus": "d_bus",
+}
+
+
+def code_tokenize(text: str, preserve_composites: bool = True) -> list[str]:
     """对代码文本进行分词，适合 BM25 关键词索引。
 
-    支持驼峰命名拆分（如 getSensorData -> get, sensor, data）、
-    下划线命名保留和运算符提取。过滤长度≤1 的无意义词元。
+    迭代6-P3 增强：
+    - 拆分 camelCase/snake_case 标识符为子 token
+    - 同时保留原始完整标识符作为 token（保留语义）
+    - 注入 OpenBMC 领域词典，确保领域术语保持完整
+
+    支持驼峰命名拆分（如 getSensorData -> get, sensor, data, getsensordata）、
+    下划线命名拆分（如 reading_value -> reading, value, reading_value）。
+    过滤长度≤1 的无意义词元。
 
     Args:
         text: 待分词的代码文本
+        preserve_composites: 是否保留原始复合标识符（默认 True）
 
     Returns:
         小写化的词元列表
     """
-    tokens = _TOKENIZE_RE.findall(text)
-    return [t.lower() for t in tokens if len(t) > 1]
+    # 步骤 1: 用正则提取原子 token
+    raw_tokens = _TOKENIZE_RE.findall(text)
+
+    # 步骤 2: 扫描文本找出连续的标识符 span（字母/数字/下划线序列）
+    identifier_spans = list(re.finditer(r'[a-zA-Z_]\w*', text))
+
+    # 建立 char_index -> raw token index 映射
+    char_to_token: dict[int, int] = {}
+    idx = 0
+    for ti, t in enumerate(raw_tokens):
+        try:
+            start = text.index(t, idx)
+        except ValueError:
+            start = idx
+        for ci in range(start, start + len(t)):
+            char_to_token[ci] = ti
+        idx = start + len(t)
+
+    # 已处理的 raw token 索引，避免重复添加
+    processed_raw_indices: set[int] = set()
+    tokens: list[str] = []
+
+    for m in identifier_spans:
+        ident = m.group()
+        ident_lower = ident.lower()
+
+        # 找到该 span 覆盖的 raw token 索引范围
+        span_tokens: set[int] = set()
+        for ci in range(m.start(), m.end()):
+            if ci in char_to_token:
+                span_tokens.add(char_to_token[ci])
+        processed_raw_indices.update(span_tokens)
+
+        if preserve_composites and len(span_tokens) > 0:
+            # 保留原始复合标识符作为 token
+            if len(ident) > 1:
+                tokens.append(ident_lower)
+
+        # 添加该 span 内的原子 token
+        for ti in sorted(span_tokens):
+            t_lower = raw_tokens[ti].lower()
+            if len(t_lower) > 1:
+                tokens.append(t_lower)
+
+    # 步骤 3: 添加不属于任何标识符的 token（运算符、独立标点等）
+    for ti, t in enumerate(raw_tokens):
+        if ti not in processed_raw_indices:
+            t_lower = t.lower()
+            if len(t_lower) > 1:
+                tokens.append(t_lower)
+
+    # 步骤 4: 将领域多词组合的 token 还原为完整形式
+    # 同时保留原始子 token，确保领域术语的子词也能匹配
+    if preserve_composites and len(tokens) >= 2:
+        enhanced: list[str] = []
+        i = 0
+        while i < len(tokens):
+            # 尝试匹配 2-5 词的组合
+            matched = False
+            for n in range(min(5, len(tokens) - i), 1, -1):
+                candidate = "_".join(tokens[i:i + n])
+                if candidate in _DOMAIN_MULTI_WORD:
+                    # 保留原始的个体 token（确保子词匹配）
+                    enhanced.extend(tokens[i:i + n])
+                    # 同时添加领域复合 token
+                    enhanced.append(_DOMAIN_MULTI_WORD[candidate])
+                    i += n
+                    matched = True
+                    break
+            if not matched:
+                enhanced.append(tokens[i])
+                i += 1
+        tokens = enhanced
+
+    # 步骤 5: 过滤长度 ≤1 的 token
+    return [t for t in tokens if len(t) > 1]
 
 
 class BM25Index:

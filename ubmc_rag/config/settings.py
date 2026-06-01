@@ -183,6 +183,10 @@ class SearchConfig(BaseModel):
     mds_model_match_boost: float = 2.0
     content_keyword_boost: float = 1.2
     diversity_max_per_file: int = 3
+    # 交叉编码器重排序配置 (迭代6-P0)
+    cross_encoder_enabled: bool = False
+    cross_encoder_model: str = "BAAI/bge-reranker-v2-m3"
+    cross_encoder_device: str = "cpu"
 
 
 class MCPConfig(BaseModel):
