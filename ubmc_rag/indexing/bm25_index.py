@@ -2,7 +2,6 @@
 
 基于 rank_bm25 库实现 Okapi BM25 算法，配合专门为代码设计的
 分词器（支持驼峰命名、下划线命名和运算符拆分）。
-迭代6-B：移除复合 token 生成，简化分词逻辑。
 支持索引的序列化和反序列化，以便持久化到磁盘。
 """
 
@@ -21,40 +20,16 @@ from ubmc_rag.models.code_chunk import CodeChunk
 logger = logging.getLogger(__name__)
 
 # 代码感知分词正则：识别驼峰命名、下划线命名、数字和运算符
-# 迭代6-P3 修复：\b 无法匹配字母→下划线边界（因 _ 是 \w），改用 [^A-Za-z]|$
 _TOKENIZE_RE = re.compile(
-    r"[A-Z]?[a-z]+|[A-Z]+(?=[A-Z][a-z]|\d|[^A-Za-z]|$)|\d+|[a-zA-Z]\w*|[^\s\w]"
+    r"[A-Z]?[a-z]+|[A-Z]+(?=[A-Z][a-z]|\d|\b)|\d+|[a-zA-Z]\w*|[^\s\w]"
 )
-
-# OpenBMC 领域词典：嵌入式固件和 IPMI 协议常用术语
-# 这些术语在 BM25 索引中应保持完整，不被进一步拆分
-_DOMAIN_DICTIONARY: set[str] = {
-    # IPMI 协议相关
-    "ipmi", "sel", "sdr", "pef", "fru", "vpd", "i2c", "smbus", "dbus",
-    # 传感器相关
-    "sensor", "threshold", "discrete", "analog",
-    # 固件相关
-    "firmware", "bios", "bmc", "uefi", "boot", "power", "thermal",
-    # 硬件管理
-    "gpio", "pcie", "nvme", "dimm", "cpu", "psu", "fan", "led",
-    # 事件和日志
-    "event", "alert", "log", "syslog", "redfish",
-    # 常见缩写
-    "api", "cmd", "cfg", "mgr", "ctrl", "util", "info", "data", "dev",
-}
 
 
 def code_tokenize(text: str) -> list[str]:
     """对代码文本进行分词，适合 BM25 关键词索引。
 
-    迭代6-B：简化分词器，移除复合 token 生成逻辑。
-    - 拆分 camelCase/snake_case 标识符为子 token
-    - 不再保留原始复合标识符（去复合 token）
-    - 注入 OpenBMC 领域词典，确保领域术语保持完整
-
     支持驼峰命名拆分（如 getSensorData -> get, sensor, data）、
-    下划线命名拆分（如 reading_value -> reading, value）。
-    过滤长度≤1 的无意义词元。
+    下划线命名保留和运算符提取。过滤长度≤1 的无意义词元。
 
     Args:
         text: 待分词的代码文本
@@ -62,11 +37,8 @@ def code_tokenize(text: str) -> list[str]:
     Returns:
         小写化的词元列表
     """
-    # 用正则提取原子 token（已处理 camelCase 和 snake_case 拆分）
-    raw_tokens = _TOKENIZE_RE.findall(text)
-
-    # 小写化、过滤长度 ≤1 的 token
-    return [t.lower() for t in raw_tokens if len(t) > 1]
+    tokens = _TOKENIZE_RE.findall(text)
+    return [t.lower() for t in tokens if len(t) > 1]
 
 
 class BM25Index:

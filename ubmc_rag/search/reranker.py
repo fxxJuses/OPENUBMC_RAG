@@ -5,31 +5,20 @@
 统一的融合+排序模块。Reranker 接收原始的 Dense 和 BM25 SearchResult 列表，
 内部完成 RRF 融合、符号/路径/仓库匹配提升、多样性过滤。
 
-迭代6-P0：增加可选的交叉编码器重排序步骤，在 boosting 之后、
-diversity 之前对候选结果进行深度语义评分。
-
 工作流程：
 1. RRF 融合 Dense + BM25 双路结果
 2. 符号名精确匹配提升（加法 bonus）
 3. 仓库名匹配提升（加法 bonus）
 4. 文件路径匹配提升（加法 bonus）
 5. MDS 模型类名匹配提升（加法 bonus）
-6. [可选] 交叉编码器深度语义重排序
-7. 按最终分数重新排序
-8. 同文件结果多样性降权
+6. 按提升后分数重新排序
+7. 同文件结果多样性降权
 """
 
 from __future__ import annotations
 
-import logging
-from typing import Optional
-
 from ubmc_rag.config.settings import SearchConfig
 from ubmc_rag.models.search_result import SearchResult
-from ubmc_rag.search.cross_encoder import CrossEncoderReranker
-from ubmc_rag.search.dashscope_reranker import DashScopeReranker
-
-logger = logging.getLogger(__name__)
 
 # H3: 加法 bonus 常量（对标乘法 boost 效果，适配 RRF 分值范围）
 SYMBOL_BONUS = 0.008        # 原 symbol_match_boost=1.5, 等效 +0.005-0.008
@@ -46,74 +35,12 @@ class Reranker:
     Reranker 接收原始 Dense 和 BM25 结果，内部完成 RRF 融合，
     然后应用 boosting 和 diversity，返回最终排序结果。
 
-    迭代6-P0：支持可选的交叉编码器深度重排序步骤。
-    迭代6-B：支持可选的 DashScope qwen3-rerank API 重排序。
-
     Attributes:
         config: 搜索配置，包含 RRF 参数和提升规则参数
-        cross_encoder: 交叉编码器重排序器实例（延迟初始化）
-        dashscope_reranker: DashScope 重排序器实例（延迟初始化）
     """
 
     def __init__(self, config: SearchConfig):
         self.config = config
-        self._cross_encoder: Optional[CrossEncoderReranker] = None
-        self._cross_encoder_init_attempted = False
-        self._dashscope_reranker: Optional[DashScopeReranker] = None
-        self._dashscope_init_attempted = False
-
-    def _get_cross_encoder(self) -> Optional[CrossEncoderReranker]:
-        """延迟初始化交叉编码器（仅在启用且首次使用时加载）。"""
-        if not self.config.cross_encoder_enabled:
-            return None
-        if self._cross_encoder_init_attempted:
-            return self._cross_encoder
-        self._cross_encoder_init_attempted = True
-        try:
-            self._cross_encoder = CrossEncoderReranker(
-                model_name=self.config.cross_encoder_model,
-                device=self.config.cross_encoder_device,
-            )
-            if self._cross_encoder.is_fallback:
-                logger.info(
-                    "Cross-encoder initialized in fallback mode (heuristic rerank)"
-                )
-            else:
-                logger.info(
-                    "Cross-encoder initialized: %s", self.config.cross_encoder_model,
-                )
-        except Exception as e:
-            logger.warning("Failed to initialize cross-encoder: %s", e)
-            self._cross_encoder = None
-        return self._cross_encoder
-
-    def _get_dashscope_reranker(self) -> Optional[DashScopeReranker]:
-        """延迟初始化 DashScope 重排序器（仅在启用且首次使用时加载）。"""
-        if not self.config.dashscope_reranker_enabled:
-            return None
-        if self._dashscope_init_attempted:
-            return self._dashscope_reranker
-        self._dashscope_init_attempted = True
-        try:
-            import os
-            api_key = os.environ.get("DASHSCOPE_API_KEY")
-            self._dashscope_reranker = DashScopeReranker(
-                api_key=api_key,
-                model=self.config.dashscope_reranker_model,
-                top_n=self.config.dashscope_reranker_top_n,
-            )
-            if self._dashscope_reranker.available:
-                logger.info(
-                    "DashScope reranker initialized: %s", self.config.dashscope_reranker_model,
-                )
-            else:
-                logger.warning(
-                    "DashScope reranker has no API key; will return un-reranked results"
-                )
-        except Exception as e:
-            logger.warning("Failed to initialize DashScope reranker: %s", e)
-            self._dashscope_reranker = None
-        return self._dashscope_reranker
 
     def rrf_fuse(
         self,
@@ -187,18 +114,14 @@ class Reranker:
         bm25_weight: float | None = None,
         dense_weight: float | None = None,
         skip_boost: bool = False,
-        skip_cross_encoder: bool = False,
-        skip_dashscope_reranker: bool = False,
     ) -> list[SearchResult]:
         """对双路检索结果执行 RRF 融合 + 重排序。
 
-        处理步骤（迭代6-B 增强）：
+        处理步骤：
         1. RRF 融合 Dense + BM25 结果
         2. 如果未 skip_boost：应用符号名、仓库名、文件路径、MDS 模型匹配提升
-        3. [可选] 交叉编码器深度语义重排序
-        4. [可选] DashScope qwen3-rerank API 重排序
-        5. 按最终分数重新排序
-        6. 同一文件的重复结果降权（超过 diversity_max_per_file 的结果分数 ×0.7）
+        3. 按提升后分数重新排序
+        4. 同一文件的重复结果降权（超过 diversity_max_per_file 的结果分数 ×0.7）
 
         Args:
             dense_results: Dense 向量检索结果列表
@@ -208,8 +131,6 @@ class Reranker:
             bm25_weight: BM25 路径权重，默认使用配置值
             dense_weight: Dense 路径权重，默认使用配置值
             skip_boost: 是否跳过 boosting（仅 RRF + diversity）
-            skip_cross_encoder: 是否跳过交叉编码器重排序
-            skip_dashscope_reranker: 是否跳过 DashScope 重排序
 
         Returns:
             重排序后的搜索结果列表
@@ -231,22 +152,10 @@ class Reranker:
             # 仅 RRF + diversity，不做 boosting
             return self._apply_diversity(candidates)[:top_k]
 
-        # 步骤 2: 应用 boosting + 重排
+        # 步骤 2-3: 应用 boosting + 重排
         boosted = self._apply_boosts(candidates, query)
 
-        # 步骤 3 (P0): 交叉编码器深度语义重排序
-        if not skip_cross_encoder:
-            cross_enc = self._get_cross_encoder()
-            if cross_enc is not None:
-                boosted = cross_enc.rerank(query, boosted, top_k=len(boosted))
-
-        # 步骤 4 (6-B): DashScope qwen3-rerank API 重排序
-        if not skip_dashscope_reranker:
-            ds_reranker = self._get_dashscope_reranker()
-            if ds_reranker is not None:
-                boosted = ds_reranker.rerank(query, boosted, top_k=len(boosted))
-
-        # 步骤 5: 多样性过滤
+        # 步骤 4: 多样性过滤
         diversified = self._apply_diversity(boosted)
 
         return diversified[:top_k]
