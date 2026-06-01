@@ -99,7 +99,7 @@ search:
   mds_model_match_boost: 2.0
   diversity_max_per_file: 3
   # Cross-encoder reranker (P0, optional)
-  cross_encoder_enabled: true
+  cross_encoder_enabled: false
   cross_encoder_model: "BAAI/bge-reranker-v2-m3"
   cross_encoder_device: "cpu"
   # DashScope qwen3-rerank (6-B, optional, requires DASHSCOPE_API_KEY)
