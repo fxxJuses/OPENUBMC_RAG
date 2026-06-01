@@ -19,7 +19,7 @@ from ubmc_rag.indexing.embedder import Embedder
 from ubmc_rag.indexing.vector_store import VectorStore
 from ubmc_rag.models.code_chunk import CodeChunk
 from ubmc_rag.models.search_result import SearchResult
-from ubmc_rag.search.query_processor import QueryProcessor
+from ubmc_rag.search.query_processor import ProcessedQuery, QueryProcessor
 from ubmc_rag.search.reranker import Reranker
 
 logger = logging.getLogger(__name__)
@@ -70,6 +70,7 @@ class HybridSearchEngine:
         repo: str | None = None,
         chunk_type: str | None = None,
         is_code_query: bool | None = None,
+        query_type: str | None = None,
     ) -> list[SearchResult]:
         """执行混合搜索，返回融合并重排序后的结果。
 
@@ -80,6 +81,8 @@ class HybridSearchEngine:
             repo: 按仓库名过滤（如 "sensor"）
             chunk_type: 按分块类型过滤（如 "function", "mds_model"）
             is_code_query: 是否为代码类查询（影响 BM25/Dense 权重）
+            query_type: 查询类型，可选 exact_match / semantic_match / mixed
+                       （影响 BM25/Dense 权重分配）
 
         Returns:
             重排序后的搜索结果列表
@@ -89,7 +92,7 @@ class HybridSearchEngine:
         top_k = min(top_k, search_config.max_top_k)
 
         # 查询分析：提取意图和过滤条件
-        processed = self.query_processor.process(query)
+        processed = self.query_processor.process(query, query_type=query_type)
         if is_code_query is not None:
             processed.is_code_query = is_code_query
 
@@ -122,8 +125,8 @@ class HybridSearchEngine:
         # RRF 融合
         fused = self._rrf_fuse(
             dense_results, bm25_results,
-            bm25_weight=self._get_bm25_weight(processed.is_code_query),
-            dense_weight=self._get_dense_weight(processed.is_code_query),
+            bm25_weight=self._get_bm25_weight(processed),
+            dense_weight=self._get_dense_weight(processed),
             k=search_config.rrf_k,
         )
 
@@ -176,18 +179,34 @@ class HybridSearchEngine:
 
         return sorted(scores.items(), key=lambda x: x[1], reverse=True)
 
-    def _get_bm25_weight(self, is_code_query: bool) -> float:
-        """获取 BM25 权重，代码类查询时额外提升关键词匹配的重要性。"""
-        base = self.config.search.bm25_weight
-        if is_code_query:
-            base += self.config.search.code_query_bm25_boost
-        return base
+    def _get_bm25_weight(self, processed: "ProcessedQuery") -> float:
+        """获取 BM25 权重。
 
-    def _get_dense_weight(self, is_code_query: bool) -> float:
-        """获取 Dense 权重，代码类查询时适当降低语义匹配的占比。"""
+        基于 is_code_query（代码查询增强）和 query_type 路由调整：
+        - exact_match: BM25 +0.1
+        - semantic_match: BM25 -0.1
+        - mixed: 保持默认
+        """
+        base = self.config.search.bm25_weight
+        if processed.is_code_query:
+            base += self.config.search.code_query_bm25_boost
+        # H2: query_type 路由调整
+        base += processed.bm25_weight_adjust
+        return max(base, 0.1)
+
+    def _get_dense_weight(self, processed: "ProcessedQuery") -> float:
+        """获取 Dense 权重。
+
+        基于 is_code_query（代码查询时降低语义占比）和 query_type 路由调整：
+        - exact_match: Dense -0.1
+        - semantic_match: Dense +0.1
+        - mixed: 保持默认
+        """
         base = self.config.search.dense_weight
-        if is_code_query:
+        if processed.is_code_query:
             base -= self.config.search.code_query_bm25_boost
+        # H2: query_type 路由调整
+        base += processed.dense_weight_adjust
         return max(base, 0.1)
 
     def _reconstruct_chunk(self, chunk_id: str, dense_results: list[dict]) -> Optional[CodeChunk]:
