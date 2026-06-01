@@ -2,7 +2,7 @@
 
 基于 rank_bm25 库实现 Okapi BM25 算法，配合专门为代码设计的
 分词器（支持驼峰命名、下划线命名和运算符拆分）。
-迭代6-P3：增强代码分词 — 领域词典注入、保留原始 token 同时添加拆分后的子 token。
+迭代6-B：移除复合 token 生成，简化分词逻辑。
 支持索引的序列化和反序列化，以便持久化到磁盘。
 """
 
@@ -43,120 +43,30 @@ _DOMAIN_DICTIONARY: set[str] = {
     "api", "cmd", "cfg", "mgr", "ctrl", "util", "info", "data", "dev",
 }
 
-# 领域多词组合：保持完整不被拆分的多词术语（小写）
-_DOMAIN_MULTI_WORD: dict[str, str] = {
-    "ipmi_cmd": "ipmi_cmd",
-    "get_sensor_reading": "get_sensor_reading",
-    "sensor_reading": "sensor_reading",
-    "power_supply": "power_supply",
-    "event_log": "event_log",
-    "sel_event": "sel_event",
-    "sel_info": "sel_info",
-    "sdr_management": "sdr_management",
-    "pef_management": "pef_management",
-    "fru_data": "fru_data",
-    "vpd_data": "vpd_data",
-    "i2c_bus": "i2c_bus",
-    "gpio_pin": "gpio_pin",
-    "d_bus": "d_bus",
-}
 
-
-def code_tokenize(text: str, preserve_composites: bool = True) -> list[str]:
+def code_tokenize(text: str) -> list[str]:
     """对代码文本进行分词，适合 BM25 关键词索引。
 
-    迭代6-P3 增强：
+    迭代6-B：简化分词器，移除复合 token 生成逻辑。
     - 拆分 camelCase/snake_case 标识符为子 token
-    - 同时保留原始完整标识符作为 token（保留语义）
+    - 不再保留原始复合标识符（去复合 token）
     - 注入 OpenBMC 领域词典，确保领域术语保持完整
 
-    支持驼峰命名拆分（如 getSensorData -> get, sensor, data, getsensordata）、
-    下划线命名拆分（如 reading_value -> reading, value, reading_value）。
+    支持驼峰命名拆分（如 getSensorData -> get, sensor, data）、
+    下划线命名拆分（如 reading_value -> reading, value）。
     过滤长度≤1 的无意义词元。
 
     Args:
         text: 待分词的代码文本
-        preserve_composites: 是否保留原始复合标识符（默认 True）
 
     Returns:
         小写化的词元列表
     """
-    # 步骤 1: 用正则提取原子 token
+    # 用正则提取原子 token（已处理 camelCase 和 snake_case 拆分）
     raw_tokens = _TOKENIZE_RE.findall(text)
 
-    # 步骤 2: 扫描文本找出连续的标识符 span（字母/数字/下划线序列）
-    identifier_spans = list(re.finditer(r'[a-zA-Z_]\w*', text))
-
-    # 建立 char_index -> raw token index 映射
-    char_to_token: dict[int, int] = {}
-    idx = 0
-    for ti, t in enumerate(raw_tokens):
-        try:
-            start = text.index(t, idx)
-        except ValueError:
-            start = idx
-        for ci in range(start, start + len(t)):
-            char_to_token[ci] = ti
-        idx = start + len(t)
-
-    # 已处理的 raw token 索引，避免重复添加
-    processed_raw_indices: set[int] = set()
-    tokens: list[str] = []
-
-    for m in identifier_spans:
-        ident = m.group()
-        ident_lower = ident.lower()
-
-        # 找到该 span 覆盖的 raw token 索引范围
-        span_tokens: set[int] = set()
-        for ci in range(m.start(), m.end()):
-            if ci in char_to_token:
-                span_tokens.add(char_to_token[ci])
-        processed_raw_indices.update(span_tokens)
-
-        if preserve_composites and len(span_tokens) > 0:
-            # 保留原始复合标识符作为 token
-            if len(ident) > 1:
-                tokens.append(ident_lower)
-
-        # 添加该 span 内的原子 token
-        for ti in sorted(span_tokens):
-            t_lower = raw_tokens[ti].lower()
-            if len(t_lower) > 1:
-                tokens.append(t_lower)
-
-    # 步骤 3: 添加不属于任何标识符的 token（运算符、独立标点等）
-    for ti, t in enumerate(raw_tokens):
-        if ti not in processed_raw_indices:
-            t_lower = t.lower()
-            if len(t_lower) > 1:
-                tokens.append(t_lower)
-
-    # 步骤 4: 将领域多词组合的 token 还原为完整形式
-    # 同时保留原始子 token，确保领域术语的子词也能匹配
-    if preserve_composites and len(tokens) >= 2:
-        enhanced: list[str] = []
-        i = 0
-        while i < len(tokens):
-            # 尝试匹配 2-5 词的组合
-            matched = False
-            for n in range(min(5, len(tokens) - i), 1, -1):
-                candidate = "_".join(tokens[i:i + n])
-                if candidate in _DOMAIN_MULTI_WORD:
-                    # 保留原始的个体 token（确保子词匹配）
-                    enhanced.extend(tokens[i:i + n])
-                    # 同时添加领域复合 token
-                    enhanced.append(_DOMAIN_MULTI_WORD[candidate])
-                    i += n
-                    matched = True
-                    break
-            if not matched:
-                enhanced.append(tokens[i])
-                i += 1
-        tokens = enhanced
-
-    # 步骤 5: 过滤长度 ≤1 的 token
-    return [t for t in tokens if len(t) > 1]
+    # 小写化、过滤长度 ≤1 的 token
+    return [t.lower() for t in raw_tokens if len(t) > 1]
 
 
 class BM25Index:

@@ -187,6 +187,10 @@ class SearchConfig(BaseModel):
     cross_encoder_enabled: bool = False
     cross_encoder_model: str = "BAAI/bge-reranker-v2-m3"
     cross_encoder_device: str = "cpu"
+    # DashScope qwen3-rerank 配置 (迭代6-B)
+    dashscope_reranker_enabled: bool = False
+    dashscope_reranker_model: str = "qwen3-rerank"
+    dashscope_reranker_top_n: int = 20
 
 
 class MCPConfig(BaseModel):

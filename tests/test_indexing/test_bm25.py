@@ -1,8 +1,8 @@
-"""Tests for BM25 code tokenizer (迭代6-P3 enhanced).
+"""Tests for BM25 code tokenizer (迭代6-B simplified).
 
 Verifies:
-- camelCase splitting with composite preservation
-- snake_case splitting with composite preservation
+- camelCase splitting (no composite preservation)
+- snake_case splitting (no composite preservation)
 - Domain dictionary: IPMI, FRU, SEL etc. maintained intact
 - Backward compatibility with existing tests
 """
@@ -14,40 +14,48 @@ from ubmc_rag.models.code_chunk import CodeChunk
 
 
 def test_code_tokenize_camelcase():
-    """Test camelCase splitting preserves both composite and sub-tokens."""
+    """Test camelCase splitting produces sub-tokens, no composite."""
     tokens = code_tokenize("getSensorData")
     token_set = set(tokens)
     # Sub-tokens from splitting
     assert "get" in token_set, f"Expected 'get' in {tokens}"
     assert "sensor" in token_set, f"Expected 'sensor' in {tokens}"
     assert "data" in token_set, f"Expected 'data' in {tokens}"
-    # Composite token preserved (lowercased)
-    assert "getsensordata" in token_set, f"Expected 'getsensordata' in {tokens}"
+    # Composite token should NOT be present (去复合 token)
+    assert "getsensordata" not in token_set, (
+        f"Composite 'getsensordata' should NOT be in {tokens}"
+    )
 
 
 def test_code_tokenize_snakecase():
-    """Test snake_case splitting preserves composite and sub-tokens."""
+    """Test snake_case splitting produces sub-tokens, no composite."""
     tokens = code_tokenize("reading_value")
     token_set = set(tokens)
     assert "reading" in token_set, f"Expected 'reading' in {tokens}"
     assert "value" in token_set, f"Expected 'value' in {tokens}"
-    # Composite preserved
-    assert "reading_value" in token_set, f"Expected 'reading_value' in {tokens}"
+    # Composite should NOT be preserved
+    assert "reading_value" not in token_set, (
+        f"Composite 'reading_value' should NOT be in {tokens}"
+    )
 
 
 def test_code_tokenize_domain_term_ipmi():
-    """Test domain dictionary ensures IPMI terms stay intact."""
+    """Test domain dictionary terms are recognized, no composite."""
     tokens = code_tokenize("IPMI_CMD GetSensorReading FRU")
     token_set = set(tokens)
     # IPMI sub-tokens from splitting
     assert "ipmi" in token_set, f"Expected 'ipmi' in {tokens}"
     assert "cmd" in token_set, f"Expected 'cmd' in {tokens}"
-    # Domain multi-word preserved
-    assert "ipmi_cmd" in token_set, f"Expected 'ipmi_cmd' in {tokens}"
-    # camelCase splitting
-    assert "getsensorreading" in token_set, f"Expected 'getsensorreading' in {tokens}"
+    # Domain multi-word composite should NOT be preserved (去复合 token)
+    assert "ipmi_cmd" not in token_set, (
+        f"Composite 'ipmi_cmd' should NOT be in {tokens}"
+    )
+    # camelCase splitting (sub-tokens only, no composite)
     assert "get" in token_set, f"Expected 'get' in {tokens}"
     assert "reading" in token_set, f"Expected 'reading' in {tokens}"
+    assert "getsensorreading" not in token_set, (
+        f"Composite 'getsensorreading' should NOT be in {tokens}"
+    )
     # Domain term FRU
     assert "fru" in token_set, f"Expected 'fru' in {tokens}"
 
@@ -77,7 +85,7 @@ def test_code_tokenize_filter_short():
 
 
 def test_code_tokenize_backward_compat():
-    """Test backward compatibility: original test patterns still pass."""
+    """Test backward compatibility: sub-token patterns still work."""
     tokens = code_tokenize("getSensorData reading_value IPMI_CMD")
     lower_tokens = [t.lower() for t in tokens]
     # Original assertion: sub-tokens exist
@@ -85,15 +93,17 @@ def test_code_tokenize_backward_compat():
     assert "sensor" in lower_tokens
     assert "data" in lower_tokens
     assert "reading" in lower_tokens
-    # Enhanced: composite tokens also exist
-    assert "getsensordata" in lower_tokens
-    assert "reading_value" in lower_tokens
-    assert "ipmi_cmd" in lower_tokens
+    assert "ipmi" in lower_tokens
+    assert "cmd" in lower_tokens
+    # 迭代6-B: composites should NOT be present (去复合 token)
+    assert "getsensordata" not in lower_tokens
+    assert "reading_value" not in lower_tokens
+    assert "ipmi_cmd" not in lower_tokens
 
 
 def test_code_tokenize_no_composites():
-    """Test with preserve_composites=False: only sub-tokens, no composites."""
-    tokens = code_tokenize("getSensorData", preserve_composites=False)
+    """Original no-composite test still passes with simplified tokenizer."""
+    tokens = code_tokenize("getSensorData")
     # Should have sub-tokens
     assert "get" in tokens
     assert "sensor" in tokens
@@ -103,7 +113,7 @@ def test_code_tokenize_no_composites():
 
 
 def test_bm25_build_and_search():
-    """Original test: BM25 build and search still works with enhanced tokenizer."""
+    """Original test: BM25 build and search still works with simplified tokenizer."""
     chunks = [
         CodeChunk(
             chunk_id="1", content="function get_sensor_data(sensor_id) return data end",
@@ -132,7 +142,7 @@ def test_bm25_build_and_search():
 
 
 def test_bm25_save_load(tmp_path):
-    """Original test: BM25 save/load with enhanced tokenizer."""
+    """Original test: BM25 save/load with simplified tokenizer."""
     chunks = [
         CodeChunk(
             chunk_id="1", content="test function",
@@ -156,8 +166,8 @@ def test_bm25_save_load(tmp_path):
     assert results[0][0] == "1"
 
 
-def test_bm25_with_enhanced_tokens():
-    """Test BM25 search benefits from enhanced tokenization (composite matching)."""
+def test_bm25_with_simplified_tokens():
+    """Test BM25 search with simplified tokenizer (sub-token matching)."""
     chunks = [
         CodeChunk(
             chunk_id="1", content="function getSensorReading() reads IPMI sensor data",
@@ -174,10 +184,12 @@ def test_bm25_with_enhanced_tokens():
     bm25 = BM25Index()
     bm25.build(chunks)
 
-    # Search for "getSensorReading" - composite token should match chunk 1
-    results = bm25.search("getSensorReading")
+    # Search for sub-tokens of getSensorReading - should match chunk 1
+    results = bm25.search("get sensor reading")
     assert len(results) > 0
-    assert results[0][0] == "1"
+    # Both chunks contain matched tokens; check at least one result
+    matched_ids = [r[0] for r in results]
+    assert "1" in matched_ids, f"Chunk 1 should be in results: {matched_ids}"
 
     # Search for "sensor reading" - sub-tokens should match chunk 1
     results2 = bm25.search("sensor reading")
