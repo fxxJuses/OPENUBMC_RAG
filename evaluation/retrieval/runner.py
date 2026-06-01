@@ -16,7 +16,7 @@ from ubmc_rag.config.settings import AppConfig
 
 logger = logging.getLogger(__name__)
 
-ALL_MODES = ["bm25_only", "dense_only", "hybrid", "hybrid_reranked"]
+ALL_MODES = ["bm25_only", "dense_only", "hybrid", "hybrid_reranked", "hybrid_cross_encoder"]
 
 
 @dataclass

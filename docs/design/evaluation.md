@@ -1,6 +1,7 @@
 # 评估框架设计与现状
 
 > **更新记录**：2026-05-31 完成评估框架 V2 优化，详见 [evaluation-v2-changelog.md](evaluation-v2-changelog.md)。核心变更：修复 6 个 Bug（BM25 返回 0.0、ChromaDB 过滤报错等）、新增 Precision@K/MAP/Bootstrap CI 指标、数据集扩展至 50 条、File@5 从 0.28 提升至 0.44。
+> **2026-06-01**: 完成 BGE-reranker-v2-m3 交叉编码器评估，详见 [cross-encoder-benchmark.md](../evaluation/cross-encoder-benchmark.md)。结论：交叉编码器对代码检索有负面效果（File@5: 52%→40%），不推荐启用。
 
 ## 概述
 
@@ -107,6 +108,16 @@ ubmc-rag eval all                                        # 完整评估套件
 2. **single_component 最好**：File@5 = 78%，接近简历目标的 84%
 3. **single_function 最差**：精确符号名查询（如 `get_sensor_data`）File@5 只有 50%，BM25 对代码符号的分词质量不足
 4. **cross_component 有挑战**：跨组件语义查询（如 `sensor和power_mgmt关系`）File@5 = 43%，embedding 对技术领域语义理解有限
+
+### 交叉编码器对比（2026-06-01）
+
+| 指标 | hybrid_reranked | hybrid_cross_encoder | 变化 |
+|------|----------------|---------------------|------|
+| File@5 | **0.52** | 0.40 | **-12 pp** ❌ |
+| MRR | **0.374** | 0.304 | **-19%** ❌ |
+| Recall@10 | 0.39 | 0.45 | +15% |
+
+> 详细见 [cross-encoder-benchmark.md](../evaluation/cross-encoder-benchmark.md)。结论：不推荐启用 BGE-reranker-v2-m3。
 
 ---
 

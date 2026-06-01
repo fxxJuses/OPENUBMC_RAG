@@ -1,12 +1,14 @@
-"""检索评估器：对 HybridSearchEngine 四种搜索模式运行回归评测。
+"""检索评估器：对 HybridSearchEngine 五种搜索模式运行回归评测。
 
-支持四种搜索模式，用于 A/B 对比各检索路径的效果：
+支持五种搜索模式，用于 A/B 对比各检索路径的效果：
 - "bm25_only": 仅 BM25 关键词检索
 - "dense_only": 仅向量语义检索
 - "hybrid": RRF 融合，不经过 Reranker boosting
 - "hybrid_reranked": 完整管线（默认，与生产环境一致）
+- "hybrid_cross_encoder": 完整管线 + BGE-reranker-v2-m3 交叉编码器重排序
 
 迭代5：_search_hybrid_no_rerank 改用 Reranker.rrf_fuse() 获取仅融合结果。
+迭代6-P0：增加 hybrid_cross_encoder 模式，评估交叉编码器真实效果。
 """
 
 from __future__ import annotations
@@ -25,6 +27,7 @@ from ubmc_rag.config.settings import AppConfig
 from ubmc_rag.indexing.index_manager import IndexManager
 from ubmc_rag.models.code_chunk import CodeChunk
 from ubmc_rag.models.search_result import SearchResult
+from ubmc_rag.search.cross_encoder import CrossEncoderReranker
 from ubmc_rag.search.hybrid_search import HybridSearchEngine
 
 logger = logging.getLogger(__name__)
@@ -61,6 +64,9 @@ class RetrievalEvaluator:
             config=config,
         )
         self.engine.set_chunk_index(self.chunks)
+
+        # 交叉编码器（延迟初始化）
+        self._cross_encoder: Optional[CrossEncoderReranker] = None
 
     def evaluate(
         self,
@@ -129,6 +135,9 @@ class RetrievalEvaluator:
         if search_mode == "hybrid_reranked":
             return self.engine.search(query, top_k=top_k)
 
+        if search_mode == "hybrid_cross_encoder":
+            return self._search_hybrid_cross_encoder(query, top_k)
+
         if search_mode == "hybrid":
             return self._search_hybrid_no_rerank(query, top_k)
 
@@ -191,6 +200,52 @@ class RetrievalEvaluator:
 
         # 应用 diversity 后返回
         return self.engine.reranker._apply_diversity(rrf_results)[:top_k]
+
+    def _search_hybrid_cross_encoder(self, query: str, top_k: int) -> list[SearchResult]:
+        """完整管线 + 交叉编码器重排序。
+
+        流程：RRF 融合 → 交叉编码器 top-(top_k*3) → boosting → diversity → top_k。
+        交叉编码器对 RRF 融合后的候选进行深度语义评分，提升排序精度。
+        """
+        search_config = self.config.search
+
+        # 获取双路原始 SearchResult
+        dense_results, bm25_results = self.engine.search_raw(query, top_k=top_k)
+
+        # RRF 融合
+        rrf_results = self.engine.reranker.rrf_fuse(
+            dense_results,
+            bm25_results,
+            bm25_weight=search_config.bm25_weight,
+            dense_weight=search_config.dense_weight,
+        )
+
+        # 取 top-(top_k*3) 候选送入交叉编码器
+        candidate_count = min(top_k * 3, len(rrf_results))
+        ce_candidates = rrf_results[:candidate_count]
+
+        # 交叉编码器重排序
+        if self._cross_encoder is None:
+            self._cross_encoder = CrossEncoderReranker(
+                model_name=search_config.cross_encoder_model,
+                device=search_config.cross_encoder_device,
+            )
+            logger.info(
+                "Cross-encoder initialized: model=%s device=%s fallback=%s",
+                search_config.cross_encoder_model,
+                search_config.cross_encoder_device,
+                self._cross_encoder.is_fallback,
+            )
+
+        ce_reranked = self._cross_encoder.rerank(query, ce_candidates)
+
+        # 应用 boosting（在交叉编码器分数之上）
+        boosted = self.engine.reranker._apply_boosts(ce_reranked, query)
+
+        # 应用 diversity
+        diversified = self.engine.reranker._apply_diversity(boosted)
+
+        return diversified[:top_k]
 
     def _reconstruct_from_dense(self, item: dict) -> Optional[CodeChunk]:
         """从 Dense 检索结果重建 CodeChunk。"""

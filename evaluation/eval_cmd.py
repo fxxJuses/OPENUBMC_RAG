@@ -49,7 +49,7 @@ def register(app: typer.Typer):
             "hybrid_reranked",
             "--mode",
             "-m",
-            help="Search mode: all, bm25_only, dense_only, hybrid, hybrid_reranked",
+            help="Search mode: all, bm25_only, dense_only, hybrid, hybrid_reranked, hybrid_cross_encoder",
         ),
         top_k: int = typer.Option(10, "--top-k", "-k"),
         output: str = typer.Option("", "--output", "-o", help="Save results to JSON"),
