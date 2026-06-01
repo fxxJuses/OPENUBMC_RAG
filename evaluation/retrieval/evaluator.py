@@ -3,8 +3,10 @@
 支持四种搜索模式，用于 A/B 对比各检索路径的效果：
 - "bm25_only": 仅 BM25 关键词检索
 - "dense_only": 仅向量语义检索
-- "hybrid": RRF 融合，不经过 Reranker
+- "hybrid": RRF 融合，不经过 Reranker boosting
 - "hybrid_reranked": 完整管线（默认，与生产环境一致）
+
+迭代5：_search_hybrid_no_rerank 改用 Reranker.rrf_fuse() 获取仅融合结果。
 """
 
 from __future__ import annotations
@@ -151,12 +153,12 @@ class RetrievalEvaluator:
     def _search_dense_only(self, query: str, top_k: int) -> list[SearchResult]:
         """仅 Dense 向量检索。"""
         query_embedding = self.engine.embedder.embed_query(query)
-        dense_results = self.engine.vector_store.search(
+        dense_raw = self.engine.vector_store.search(
             query_embedding,
             top_k=top_k,
         )
         results = []
-        for item in dense_results[:top_k]:
+        for item in dense_raw[:top_k]:
             chunk = self._reconstruct_from_dense(item)
             if chunk:
                 results.append(
@@ -169,36 +171,26 @@ class RetrievalEvaluator:
         return results
 
     def _search_hybrid_no_rerank(self, query: str, top_k: int) -> list[SearchResult]:
-        """RRF 融合但不经过 Reranker。"""
+        """RRF 融合但不经过 boosting（仅 RRF + diversity）。
+
+        迭代5：使用 engine.search_raw() 获取双路原始结果，
+        然后通过 Reranker.rrf_fuse() 做纯 RRF 融合。
+        """
         search_config = self.config.search
 
-        # Dense
-        query_embedding = self.engine.embedder.embed_query(query)
-        dense_results = self.engine.vector_store.search(
-            query_embedding,
-            top_k=top_k * 3,
-        )
+        # 获取双路原始 SearchResult
+        dense_results, bm25_results = self.engine.search_raw(query, top_k=top_k)
 
-        # BM25
-        bm25_results = self.engine.bm25.search(query, top_k=top_k * 3)
-
-        # RRF 融合（使用默认权重，不区分 code_query）
-        fused = self.engine._rrf_fuse(
+        # 使用 Reranker 的纯 RRF 融合（不 boosting）
+        rrf_results = self.engine.reranker.rrf_fuse(
             dense_results,
             bm25_results,
             bm25_weight=search_config.bm25_weight,
             dense_weight=search_config.dense_weight,
-            k=search_config.rrf_k,
         )
 
-        results = []
-        for chunk_id, score in fused[:top_k]:
-            chunk = self.engine._chunk_cache.get(chunk_id)
-            if chunk is None:
-                chunk = self._reconstruct_from_dense_by_id(chunk_id, dense_results)
-            if chunk:
-                results.append(SearchResult(chunk=chunk, score=score, source="hybrid"))
-        return results
+        # 应用 diversity 后返回
+        return self.engine.reranker._apply_diversity(rrf_results)[:top_k]
 
     def _reconstruct_from_dense(self, item: dict) -> Optional[CodeChunk]:
         """从 Dense 检索结果重建 CodeChunk。"""
@@ -207,14 +199,3 @@ class RetrievalEvaluator:
             content=item.get("content", ""),
             meta=item.get("metadata", {}),
         )
-
-    def _reconstruct_from_dense_by_id(
-        self,
-        chunk_id: str,
-        dense_results: list[dict],
-    ) -> Optional[CodeChunk]:
-        """按 chunk_id 从 Dense 结果中查找并重建。"""
-        for item in dense_results:
-            if item.get("chunk_id") == chunk_id:
-                return self._reconstruct_from_dense(item)
-        return None

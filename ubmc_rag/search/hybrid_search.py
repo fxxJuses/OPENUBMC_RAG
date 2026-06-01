@@ -1,11 +1,13 @@
 """
-混合搜索引擎 —— BM25 关键词检索 + Dense 向量检索，通过 RRF 融合。
+混合搜索引擎 —— BM25 关键词检索 + Dense 向量检索，通过 Reranker 融合。
 
 实现双路检索架构：
 1. Dense 路径：通过 DashScope 嵌入模型 + ChromaDB 向量搜索
 2. BM25 路径：通过代码感知分词器 + Okapi BM25 关键词匹配
-3. 融合：使用 Reciprocal Rank Fusion (RRF) 合并两路结果
-4. 重排序：应用符号匹配、路径匹配等提升规则和多样性过滤
+3. 融合+重排序：Reranker 内部完成 RRF 融合 → boosting → diversity
+
+迭代5：RRF 融合逻辑已移入 Reranker，HybridSearchEngine 仅负责
+双路检索和结果组装，不再直接执行 RRF 融合。
 """
 
 from __future__ import annotations
@@ -26,13 +28,14 @@ logger = logging.getLogger(__name__)
 
 
 class HybridSearchEngine:
-    """混合搜索引擎，融合 BM25 和 Dense 双路检索结果。
+    """混合搜索引擎，执行双路检索并委托 Reranker 融合+排序。
 
     工作流程：
     1. QueryProcessor 分析查询意图、提取过滤条件、扩展术语
     2. 分别执行 BM25 和 Dense 检索
-    3. RRF 融合两路结果
-    4. Reranker 应用提升规则和多样性过滤
+    3. 构建 SearchResult 列表（Dense + BM25 各自）
+    4. 委托 Reranker 执行 RRF 融合 → boosting → diversity
+    5. 返回最终 top_k 结果
 
     Attributes:
         embedder: 向量嵌入服务
@@ -40,7 +43,7 @@ class HybridSearchEngine:
         bm25: BM25 关键词索引
         config: 应用配置
         query_processor: 查询处理器
-        reranker: 结果重排序器
+        reranker: 结果重排序器（内部集成 RRF 融合）
     """
 
     def __init__(
@@ -110,85 +113,132 @@ class HybridSearchEngine:
         if len(where) > 1:
             where = {"$and": [{k: v} for k, v in where.items()]}
 
+        # --- 双路检索 ---
+
         # Dense 向量检索
         query_embedding = self.embedder.embed_query(processed.original)
-        dense_results = self.vector_store.search(
+        dense_raw = self.vector_store.search(
             query_embedding, top_k=top_k * 3, where=where or None,
         )
 
         # BM25 关键词检索（使用扩展后的查询以增强关键词覆盖）
-        bm25_results = self.bm25.search(processed.expanded, top_k=top_k * 3)
+        bm25_raw = self.bm25.search(processed.expanded, top_k=top_k * 3)
 
-        # RRF 融合
-        fused = self._rrf_fuse(
-            dense_results, bm25_results,
-            bm25_weight=self._get_bm25_weight(processed.is_code_query),
-            dense_weight=self._get_dense_weight(processed.is_code_query),
-            k=search_config.rrf_k,
-        )
+        # --- 构建 SearchResult 列表 ---
 
-        # 构建搜索结果（迭代3-fix: 传更多候选给 Reranker，充分利用扩大后的召回池）
-        rerank_candidates = min(top_k * 3, len(fused))
-        results = []
-        for chunk_id, score in fused[:rerank_candidates]:
+        dense_results = []
+        for item in dense_raw:
+            chunk_id = item["chunk_id"]
             chunk = self._chunk_cache.get(chunk_id)
             if chunk is None:
-                chunk = self._reconstruct_chunk(chunk_id, dense_results)
+                chunk = CodeChunk.from_chroma_metadata(
+                    chunk_id=chunk_id,
+                    content=item["content"],
+                    meta=item["metadata"],
+                )
             if chunk:
-                results.append(SearchResult(chunk=chunk, score=score, source="hybrid"))
+                dense_results.append(SearchResult(
+                    chunk=chunk,
+                    score=item.get("distance", 0.0),
+                    source="dense",
+                ))
 
-        # 重排序（有更多候选可提升低排名但匹配度高的结果）
-        results = self.reranker.rerank(results, query)
+        bm25_results = []
+        for chunk_id, score in bm25_raw:
+            chunk = self._chunk_cache.get(chunk_id)
+            if chunk is None:
+                chunk = self._reconstruct_chunk(chunk_id, dense_raw)
+            if chunk:
+                bm25_results.append(SearchResult(
+                    chunk=chunk,
+                    score=score,
+                    source="bm25",
+                ))
 
-        return results[:top_k]
+        # --- 计算 RRF 权重 ---
+        bm25_w = search_config.bm25_weight
+        dense_w = search_config.dense_weight
+        if processed.is_code_query:
+            bm25_w += search_config.code_query_bm25_boost
+            dense_w -= search_config.code_query_bm25_boost
+            dense_w = max(dense_w, 0.1)
 
-    def _rrf_fuse(
+        # --- 委托 Reranker 执行 RRF 融合 + boosting + diversity ---
+        return self.reranker.rerank(
+            dense_results=dense_results,
+            bm25_results=bm25_results,
+            query=query,
+            top_k=top_k,
+            bm25_weight=bm25_w,
+            dense_weight=dense_w,
+        )
+
+    def search_raw(
         self,
-        dense_results: list[dict],
-        bm25_results: list[tuple[str, float]],
-        bm25_weight: float,
-        dense_weight: float,
-        k: int = 60,
-    ) -> list[tuple[str, float]]:
-        """Reciprocal Rank Fusion 融合 Dense 和 BM25 检索结果。
+        query: str,
+        top_k: int | None = None,
+        is_code_query: bool | None = None,
+    ) -> tuple[list[SearchResult], list[SearchResult]]:
+        """执行双路检索，返回原始的 Dense 和 BM25 结果（不做融合）。
 
-        RRF 公式：score(d) = Σ 1/(k + rank(d))
-        每路结果按其权重加权后求和，k 控制低排名结果的平滑程度。
+        供需要手动控制融合逻辑的场景使用（如评估框架的 hybrid 模式）。
 
         Args:
-            dense_results: Dense 检索结果列表
-            bm25_results: BM25 检索结果列表
-            bm25_weight: BM25 路径权重
-            dense_weight: Dense 路径权重
-            k: RRF 平滑参数
+            query: 搜索查询文本
+            top_k: 返回结果数量
+            is_code_query: 是否为代码类查询
 
         Returns:
-            (chunk_id, fused_score) 元组列表，按分数降序排列
+            (dense_results, bm25_results) 元组
         """
-        scores: dict[str, float] = {}
+        search_config = self.config.search
+        top_k = top_k or search_config.default_top_k
+        top_k = min(top_k, search_config.max_top_k)
 
-        for rank, item in enumerate(dense_results):
+        processed = self.query_processor.process(query)
+        if is_code_query is not None:
+            processed.is_code_query = is_code_query
+
+        # Dense
+        query_embedding = self.embedder.embed_query(processed.original)
+        dense_raw = self.vector_store.search(
+            query_embedding, top_k=top_k * 3,
+        )
+
+        # BM25
+        bm25_raw = self.bm25.search(processed.expanded, top_k=top_k * 3)
+
+        # Build results
+        dense_results = []
+        for item in dense_raw:
             chunk_id = item["chunk_id"]
-            scores[chunk_id] = scores.get(chunk_id, 0) + dense_weight / (k + rank + 1)
+            chunk = self._chunk_cache.get(chunk_id)
+            if chunk is None:
+                chunk = CodeChunk.from_chroma_metadata(
+                    chunk_id=chunk_id,
+                    content=item["content"],
+                    meta=item["metadata"],
+                )
+            if chunk:
+                dense_results.append(SearchResult(
+                    chunk=chunk,
+                    score=item.get("distance", 0.0),
+                    source="dense",
+                ))
 
-        for rank, (chunk_id, _score) in enumerate(bm25_results):
-            scores[chunk_id] = scores.get(chunk_id, 0) + bm25_weight / (k + rank + 1)
+        bm25_results = []
+        for chunk_id, score in bm25_raw:
+            chunk = self._chunk_cache.get(chunk_id)
+            if chunk is None:
+                chunk = self._reconstruct_chunk(chunk_id, dense_raw)
+            if chunk:
+                bm25_results.append(SearchResult(
+                    chunk=chunk,
+                    score=score,
+                    source="bm25",
+                ))
 
-        return sorted(scores.items(), key=lambda x: x[1], reverse=True)
-
-    def _get_bm25_weight(self, is_code_query: bool) -> float:
-        """获取 BM25 权重，代码类查询时额外提升关键词匹配的重要性。"""
-        base = self.config.search.bm25_weight
-        if is_code_query:
-            base += self.config.search.code_query_bm25_boost
-        return base
-
-    def _get_dense_weight(self, is_code_query: bool) -> float:
-        """获取 Dense 权重，代码类查询时适当降低语义匹配的占比。"""
-        base = self.config.search.dense_weight
-        if is_code_query:
-            base -= self.config.search.code_query_bm25_boost
-        return max(base, 0.1)
+        return dense_results, bm25_results
 
     def _reconstruct_chunk(self, chunk_id: str, dense_results: list[dict]) -> Optional[CodeChunk]:
         """从 Dense 检索结果中重建 CodeChunk 对象（分块不在缓存中时的降级方案）。"""
