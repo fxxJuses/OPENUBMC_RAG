@@ -96,7 +96,7 @@ class Reranker:
         self._dashscope_init_attempted = True
         try:
             import os
-            api_key = os.environ.get("DASHSCOPE_API_KEY", "")
+            api_key = os.environ.get("DASHSCOPE_API_KEY")
             self._dashscope_reranker = DashScopeReranker(
                 api_key=api_key,
                 model=self.config.dashscope_reranker_model,

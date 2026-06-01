@@ -46,17 +46,17 @@ class DashScopeReranker:
 
     def __init__(
         self,
-        api_key: str = "",
+        api_key: Optional[str] = None,
         model: str = _DASHSCOPE_RERANK_MODEL,
         top_n: int = 20,
     ):
         """
         Args:
-            api_key: DashScope API 密钥，为空则从环境变量读取
+            api_key: DashScope API 密钥，为 None 则从环境变量读取
             model: 模型名称
             top_n: 单次 API 调用返回的最大结果数
         """
-        self.api_key = api_key or os.environ.get("DASHSCOPE_API_KEY", "")
+        self.api_key = api_key if api_key is not None else os.environ.get("DASHSCOPE_API_KEY", "")
         self.model = model
         self.top_n = top_n
         self._last_call_time = 0.0
@@ -210,7 +210,7 @@ class DashScopeReranker:
 
 
 def create_dashscope_reranker(
-    api_key: str = "",
+    api_key: Optional[str] = None,
     model: str = _DASHSCOPE_RERANK_MODEL,
     top_n: int = 20,
 ) -> DashScopeReranker:
