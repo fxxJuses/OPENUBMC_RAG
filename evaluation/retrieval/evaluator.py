@@ -82,12 +82,7 @@ class RetrievalEvaluator:
 
         for tc in dataset.test_cases:
             try:
-                results = self._search(
-                    tc.query,
-                    top_k=top_k,
-                    search_mode=search_mode,
-                    query_type=tc.query_type,
-                )
+                results = self._search(tc.query, top_k=top_k, search_mode=search_mode)
                 cr = evaluate_case(results, tc)
                 case_results.append(cr)
                 logger.debug(
@@ -118,7 +113,6 @@ class RetrievalEvaluator:
         query: str,
         top_k: int = 10,
         search_mode: str = "hybrid_reranked",
-        query_type: str | None = None,
     ) -> list[SearchResult]:
         """根据搜索模式执行检索。
 
@@ -126,13 +120,12 @@ class RetrievalEvaluator:
             query: 查询文本
             top_k: 返回结果数
             search_mode: 搜索模式
-            query_type: 查询类型（exact_match / semantic_match / mixed）
 
         Returns:
             搜索结果列表
         """
         if search_mode == "hybrid_reranked":
-            return self.engine.search(query, top_k=top_k, query_type=query_type)
+            return self.engine.search(query, top_k=top_k)
 
         if search_mode == "hybrid":
             return self._search_hybrid_no_rerank(query, top_k)
