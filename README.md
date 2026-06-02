@@ -6,18 +6,129 @@
 
 - **AST 感知分块**：基于 Tree-sitter 解析 Lua / C / C++ / Python / JSON 源码，按函数、类、结构体等语义边界切分
 - **混合检索**：ChromaDB 向量搜索 + BM25 关键词搜索，通过 RRF（Reciprocal Rank Fusion）融合排序
-- **Reranker 重排**：符号/路径加权 + 多样性控制，提升结果精度
+- **LLM 查询重写**：DashScope Qwen 将模糊自然语言转为代码关键词，额外 Dense 检索注入候选池
+- **云端重排序**：DashScope qwen3-rerank 归一化加权融合，提升排序精度（MRR +7.9%）
+- **意图感知检索**：自动识别依赖/接口/入口文件等查询意图，定向注入相关分块
+- **Reranker 重排**：符号/路径/仓库多维度加权 + 多样性控制
 - **ReAct Agent**：LLM 自主决策检索策略，支持多轮对话和追问改写
 - **MCP Server**：通过 FastMCP 暴露 5 个检索工具，可接入 Claude Desktop / VS Code
 - **CLI 工具**：完整的命令行界面，支持索引构建、搜索、交互式问答、质量评估
-- **检索评估**：50 条回归测试用例，13 项检索指标，四模式 A/B 对比，Bootstrap 置信区间
+- **检索评估**：50 条回归测试用例，13 项检索指标，七模式 A/B 对比，Bootstrap 置信区间
 
 ## 系统架构
 
 ```
-GitCode 仓库 → AST 解析分块 → DashScope Embedding → 混合索引 (ChromaDB + BM25)
-                                                              ↓
-                CLI / MCP Client ← ReAct Agent (Qwen) ← 混合检索引擎 (RRF + Reranker)
+                         ┌──────────────────────────────────────────┐
+                         │              用户接口层                   │
+                         │   CLI (Typer)  │  MCP Server  │  Chat    │
+                         └───────┬────────┴──────┬───────┴────┬─────┘
+                                 │               │            │
+                                 ▼               ▼            ▼
+                         ┌──────────────────────────────────────────┐
+                         │            ReAct Agent (Qwen)            │
+                         │   搜索工具 │ 组件信息 │ 代码阅读 │ 依赖查询  │
+                         └───────────────────┬──────────────────────┘
+                                             │
+                                             ▼
+┌────────────────────────────────────────────────────────────────────────────┐
+│                          混合搜索引擎 (HybridSearchEngine)                  │
+│                                                                            │
+│  ┌─────────────┐    ┌─────────────────────────────────────────────────┐   │
+│  │ 查询处理器   │───▶│  QueryProcessor: 意图分析 + 过滤 + 术语扩展      │   │
+│  │             │    │  + 拼写纠正 (76 领域术语)                        │   │
+│  └─────────────┘    └────────────────────┬────────────────────────────┘   │
+│                                            │                               │
+│                          ┌─────────────────┼──────────────────┐           │
+│                          ▼                 ▼                  ▼           │
+│                  ┌──────────────┐  ┌──────────────┐  ┌────────────────┐  │
+│                  │  Dense 路径   │  │  BM25 路径    │  │ LLM 查询重写   │  │
+│                  │  ChromaDB    │  │  Okapi BM25  │  │ DashScope Qwen │  │
+│                  │  向量搜索     │  │  关键词匹配   │  │ → 额外 Dense   │  │
+│                  └──────┬───────┘  └──────┬───────┘  │    检索注入     │  │
+│                         │                 │          └───────┬────────┘  │
+│                         │                 │                  │           │
+│                         └────────┬────────┘──────────────────┘           │
+│                                  ▼                                      │
+│                     ┌────────────────────────┐                           │
+│                     │   意图定向补充注入       │                           │
+│                     │ • 依赖查询→service.json │                           │
+│                     │ • 入口查询→main.*.lua   │                           │
+│                     └───────────┬────────────┘                           │
+│                                 ▼                                       │
+│  ┌───────────────────────────────────────────────────────────────────┐  │
+│  │                      Reranker 重排序器                             │  │
+│  │                                                                   │  │
+│  │  ① RRF 融合 ─── Dense + BM25 双路分数合并                         │  │
+│  │        │                                                          │  │
+│  │  ② Boosting ── 符号名(+0.025) / 文件路径(+0.020)                  │  │
+│  │        │        仓库名(+0.006) / MDS模型(+0.012)                   │  │
+│  │        │                                                          │  │
+│  │  ③ DashScope ── qwen3-rerank 归一化融合 (alpha=0.6)               │  │
+│  │        │        0.6×原始分数 + 0.4×云端重排分数                     │  │
+│  │        │                                                          │  │
+│  │  ④ Diversity ── 同文件降权 (×0.5)，释放槽位                        │  │
+│  └───────────────────────────────────────────────────────────────────┘  │
+│                                 │                                       │
+│                                 ▼                                       │
+│                          Top-K 最终结果                                  │
+└──────────────────────────────────────────────────────────────────────────┘
+          │
+          ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│                            索引层 (IndexManager)                          │
+│                                                                          │
+│  GitCode 仓库 ──▶ GitSync ──▶ FileFilter ──▶ Tree-sitter AST 解析       │
+│       │                                                  │               │
+│       │                              ┌────────────────────┼──────────┐   │
+│       │                              ▼                    ▼          ▼   │
+│       │                       ┌─────────────┐    ┌──────────┐ ┌──────┐  │
+│       │                       │ DashScope   │    │ ChromaDB │ │ BM25 │  │
+│       │                       │ Embedding   │    │ 向量存储  │ │ 索引  │  │
+│       │                       │ text-emb-v4 │    │ (HNSW)   │ │      │  │
+│       │                       └─────────────┘    └──────────┘ └──────┘  │
+│       │                              │                 │          │      │
+│       └──────────────────────────────┴─────────────────┴──────────┘      │
+│                              data/index/                                 │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+### 搜索管线处理流程
+
+```
+用户输入: "sensor 组件如何获取温度数据"
+    │
+    ▼
+[1] QueryProcessor
+    ├─ 意图分析: is_code_query=True
+    ├─ 术语扩展: "sensor → sensor 组件 temperature 温度获取"
+    └─ 拼写纠正: 无需纠正
+    │
+    ▼
+[2] 双路并行检索
+    ├─ Dense: query_embedding → ChromaDB 向量搜索 → top-30 候选
+    └─ BM25:  扩展查询 → Okapi BM25 关键词匹配 → top-30 候选
+    │
+    ▼
+[3] LLM 查询重写 (DashScope Qwen)
+    ├─ 原始: "sensor 组件如何获取温度数据"
+    ├─ 重写: "sensor_read temperature_get sensor_threshold fru_data 温度传感器读取"
+    └─ 额外 Dense 检索 → 注入 3 个新候选到 rank=10
+    │
+    ▼
+[4] 意图定向补充 (按查询类型)
+    ├─ 匹配"依赖" → 注入 mds_service 分块
+    └─ 匹配"入口" → 注入 main.* 分块
+    │
+    ▼
+[5] Reranker 四步重排
+    ├─ ① RRF 融合: Dense + BM25 双路分数合并
+    ├─ ② Boosting: 符号/路径/仓库/MDS 匹配加成
+    ├─ ③ DashScope: qwen3-rerank 云端语义重排 (alpha=0.6 归一化融合)
+    └─ ④ Diversity: 同文件结果降权
+    │
+    ▼
+[6] 返回 Top-K 结果
+    └─ 每个结果: CodeChunk + 分数 + 来源 + 文件路径
 ```
 
 ## 检索效果
@@ -26,13 +137,23 @@ GitCode 仓库 → AST 解析分块 → DashScope Embedding → 混合索引 (Ch
 
 | 核心指标 | 值 | 说明 |
 |---------|-----|------|
-| File@5 | 0.44 | Top-5 结果包含期望文件的比例 |
-| File@10 | 0.50 | Top-10 结果包含期望文件的比例 |
-| MRR | 0.35 | 首个相关结果排名倒数均值 |
-| MAP | 0.26 | 平均精度均值 |
-| NDCG@5 | 0.53 | 排序质量（考虑相关性等级） |
-| CategoryHit@5 | 0.78 | Top-5 命中正确组件的比例 |
+| File@5 | 0.66 | Top-5 结果包含期望文件的比例 |
+| File@1 | 0.38 | Top-1 结果包含期望文件的比例 |
+| MRR | 0.47 | 首个相关结果排名倒数均值 |
+| MAP | 0.38 | 平均精度均值 |
+| NDCG@5 | 0.70 | 排序质量（考虑相关性等级） |
+| CategoryHit@5 | 0.88 | Top-5 命中正确组件的比例 |
 | SymbolHit@5 | 0.82 | Top-5 命中期望符号的比例 |
+
+### 迭代优化历程
+
+| 迭代 | 方案 | File@5 | 变化 |
+|------|------|--------|------|
+| 基线 | BM25 + Dense RRF | 0.54 | — |
+| 迭代6 | 意图感知检索 + mds_service 注入 | 0.62 | +15% |
+| 迭代7 | 同文件去重 + 拼写纠正 + 入口文件检索 | 0.64 | +3% |
+| 迭代8 | 符号/文件名精确匹配增强 | 0.64 | MRR +4.4% |
+| 迭代9 | LLM 查询重写 + DashScope 云端重排 | 0.66 | +3% |
 
 ## 快速开始
 
@@ -137,9 +258,12 @@ openUBMC_RAG/
 │   │   ├── bm25_index.py             # BM25 关键词索引
 │   │   └── index_manager.py          # 索引编排
 │   ├── search/                       # 检索引擎
-│   │   ├── hybrid_search.py          # RRF 混合检索
-│   │   ├── query_processor.py        # 查询理解
-│   │   └── reranker.py               # 结果重排
+│   │   ├── hybrid_search.py          # RRF 混合检索 + 意图定向补充
+│   │   ├── query_processor.py        # 查询理解 + 拼写纠正
+│   │   ├── query_rewriter.py         # LLM 查询重写 (DashScope Qwen)
+│   │   ├── reranker.py               # RRF融合 + Boosting + DashScope重排 + Diversity
+│   │   ├── dashscope_reranker.py     # DashScope qwen3-rerank 云端重排序
+│   │   └── cross_encoder.py          # 本地 BGE-reranker 交叉编码器 (可选)
 │   ├── chat/                         # LLM 问答
 │   │   ├── agent.py                  # ReAct Agent
 │   │   ├── retriever.py              # 自定义 Retriever
@@ -163,6 +287,7 @@ openUBMC_RAG/
 | 向量数据库 | ChromaDB (HNSW cosine) |
 | 关键词检索 | BM25Okapi |
 | 嵌入模型 | DashScope text-embedding-v4 (1024-dim) |
+| 重排序 | DashScope qwen3-rerank (云端) / BGE-reranker-v2-m3 (本地) |
 | LLM | DashScope Qwen (qwen-plus/qwen-max) |
 | Agent 框架 | LangChain ReAct |
 | MCP Server | FastMCP |
@@ -185,9 +310,11 @@ indexing:
   embedding_dim: 1024
 
 search:
-  bm25_weight: 0.4      # BM25 权重
-  dense_weight: 0.6     # 向量搜索权重
+  bm25_weight: 0.5      # BM25 权重
+  dense_weight: 0.5     # 向量搜索权重
   rrf_k: 60             # RRF 常数
+  dashscope_reranker_enabled: true   # 云端重排序
+  llm_query_rewrite_enabled: true    # LLM 查询重写
 ```
 
 ## 文档
@@ -195,6 +322,7 @@ search:
 - [系统架构设计](docs/design/architecture.md)
 - [ReAct Agent 设计](docs/design/react-agent.md)
 - [评估框架设计](docs/design/evaluation.md)
+- [迭代优化变更记录](docs/design/iteration-changelog.md)
 - [评估优化变更记录](docs/design/evaluation-v2-changelog.md)
 
 ## License
