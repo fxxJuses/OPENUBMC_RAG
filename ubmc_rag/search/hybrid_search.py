@@ -16,6 +16,8 @@ import logging
 import re
 from typing import Optional
 
+import numpy as np
+
 from ubmc_rag.config.settings import AppConfig
 from ubmc_rag.indexing.bm25_index import BM25Index
 from ubmc_rag.indexing.embedder import Embedder
@@ -31,7 +33,14 @@ logger = logging.getLogger(__name__)
 _DEPENDENCY_QUERY_RE = re.compile(
     r"依赖|dependency|dependencies|接口定义|interface|"
     r"组件.*关系|component.*dep|依赖关系|dep graph|"
-    r"service\.json|component info",
+    r"service\.json|component info|"
+    r"数据读取|数据访问|data.*read|数据流",
+    re.IGNORECASE,
+)
+
+# 入口文件相关查询关键词 —— 触发 main.cpp / *_app.lua 定向检索
+_ENTRY_POINT_QUERY_RE = re.compile(
+    r"入口|初始化|启动|startup|initialize|entry.?point|main\s|app\s",
     re.IGNORECASE,
 )
 
@@ -127,7 +136,9 @@ class HybridSearchEngine:
         # Dense 向量检索
         query_embedding = self.embedder.embed_query(processed.original)
         dense_raw = self.vector_store.search(
-            query_embedding, top_k=top_k * 3, where=where or None,
+            query_embedding,
+            top_k=top_k * 3,
+            where=where or None,
         )
 
         # BM25 关键词检索（使用扩展后的查询以增强关键词覆盖）
@@ -146,11 +157,13 @@ class HybridSearchEngine:
                     meta=item["metadata"],
                 )
             if chunk:
-                dense_results.append(SearchResult(
-                    chunk=chunk,
-                    score=item.get("distance", 0.0),
-                    source="dense",
-                ))
+                dense_results.append(
+                    SearchResult(
+                        chunk=chunk,
+                        score=item.get("distance", 0.0),
+                        source="dense",
+                    )
+                )
 
         bm25_results = []
         for chunk_id, score in bm25_raw:
@@ -158,11 +171,13 @@ class HybridSearchEngine:
             if chunk is None:
                 chunk = self._reconstruct_chunk(chunk_id, dense_raw)
             if chunk:
-                bm25_results.append(SearchResult(
-                    chunk=chunk,
-                    score=score,
-                    source="bm25",
-                ))
+                bm25_results.append(
+                    SearchResult(
+                        chunk=chunk,
+                        score=score,
+                        source="bm25",
+                    )
+                )
 
         # --- 定向补充：依赖/接口类查询注入 service.json 候选 ---
         if self._is_dependency_query(query, processed.expanded):
@@ -176,10 +191,25 @@ class HybridSearchEngine:
                 # 同步注入 BM25 结果前部，使这些 chunk 在双路都有 RRF 贡献
                 bm25_insert = min(10, len(bm25_results))
                 for i, r in enumerate(svc_results[:3]):
-                    bm25_results.insert(bm25_insert + i, SearchResult(
-                        chunk=r.chunk, score=10.0, source="bm25",
-                    ))
+                    bm25_results.insert(
+                        bm25_insert + i,
+                        SearchResult(
+                            chunk=r.chunk,
+                            score=10.0,
+                            source="bm25",
+                        ),
+                    )
                 logger.debug("Injected %d mds_service candidates", len(svc_results[:3]))
+
+        # --- 定向补充：入口文件查询注入 main.cpp / *_app.lua 候选 ---
+        if self._is_entry_point_query(query, processed.expanded):
+            existing_ids = {r.chunk.chunk_id for r in dense_results}
+            entry_results = self._retrieve_entry_points(query_embedding, existing_ids)
+            if entry_results and dense_results:
+                insert_pos = min(5, len(dense_results))
+                for i, r in enumerate(entry_results[:3]):
+                    dense_results.insert(insert_pos + i, r)
+                logger.debug("Injected %d entry-point candidates", len(entry_results[:3]))
 
         # --- 计算 RRF 权重 ---
         bm25_w = search_config.bm25_weight
@@ -199,16 +229,24 @@ class HybridSearchEngine:
             dense_weight=dense_w,
         )
 
+    def _is_entry_point_query(self, query: str, expanded: str) -> bool:
+        """检测查询是否涉及入口/初始化（触发 main.cpp / *_app.lua 定向检索）。"""
+        return bool(_ENTRY_POINT_QUERY_RE.search(query) or _ENTRY_POINT_QUERY_RE.search(expanded))
+
     def _is_dependency_query(self, query: str, expanded: str) -> bool:
         """检测查询是否涉及依赖/接口关系（触发 service.json 定向检索）。"""
         return bool(_DEPENDENCY_QUERY_RE.search(query) or _DEPENDENCY_QUERY_RE.search(expanded))
 
     def _retrieve_mds_service(
-        self, query_embedding: list[float], existing_chunk_ids: set[str],
+        self,
+        query_embedding: list[float],
+        existing_chunk_ids: set[str],
     ) -> list[SearchResult]:
         """定向检索 mds_service 分块，补充依赖/接口类查询的候选池。"""
         raw = self.vector_store.search(
-            query_embedding, top_k=10, where={"chunk_type": "mds_service"},
+            query_embedding,
+            top_k=10,
+            where={"chunk_type": "mds_service"},
         )
         results = []
         for item in raw:
@@ -218,12 +256,92 @@ class HybridSearchEngine:
             chunk = self._chunk_cache.get(cid)
             if chunk is None:
                 chunk = CodeChunk.from_chroma_metadata(
-                    chunk_id=cid, content=item["content"], meta=item["metadata"],
+                    chunk_id=cid,
+                    content=item["content"],
+                    meta=item["metadata"],
                 )
             if chunk:
-                results.append(SearchResult(
-                    chunk=chunk, score=item.get("distance", 0.0), source="dense",
-                ))
+                results.append(
+                    SearchResult(
+                        chunk=chunk,
+                        score=item.get("distance", 0.0),
+                        source="dense",
+                    )
+                )
+        return results
+
+    def _retrieve_entry_points(
+        self,
+        query_embedding: list[float],
+        existing_chunk_ids: set[str],
+    ) -> list[SearchResult]:
+        """定向检索入口文件 chunk（main.cpp / *_app.lua），补充入口类查询的候选池。
+
+        优先从 _chunk_cache 中查找 file_path 匹配的 chunk，按向量相似度排序；
+        若缓存不足则降级到 vector_store.search 检索后 Python 过滤。
+        """
+        entry_path_re = re.compile(r"(^|/)main\.cpp$|_app\.lua$")
+        candidates: list[tuple[CodeChunk, float]] = []
+
+        # 优先从 _chunk_cache 中按 file_path 筛选
+        for chunk in self._chunk_cache.values():
+            if entry_path_re.search(chunk.file_path):
+                candidates.append((chunk, 0.0))
+
+        if candidates:
+            # 按 file_path 与 query_embedding 的向量距离排序（用 cosine 相似度）
+            q_vec = np.array(query_embedding)
+            scored: list[tuple[CodeChunk, float]] = []
+            for chunk, _ in candidates:
+                if chunk.embedding is not None:
+                    c_vec = np.array(chunk.embedding)
+                    sim = float(
+                        np.dot(q_vec, c_vec)
+                        / (np.linalg.norm(q_vec) * np.linalg.norm(c_vec) + 1e-9)
+                    )
+                else:
+                    sim = 0.0
+                scored.append((chunk, sim))
+            scored.sort(key=lambda x: x[1], reverse=True)
+
+            results = []
+            for chunk, sim in scored:
+                if chunk.chunk_id not in existing_chunk_ids:
+                    results.append(
+                        SearchResult(
+                            chunk=chunk,
+                            score=sim,
+                            source="dense",
+                        )
+                    )
+            return results
+
+        # 降级：通过 vector_store.search 检索 top_k=20，Python 过滤 file_path
+        raw = self.vector_store.search(query_embedding, top_k=20)
+        results = []
+        for item in raw:
+            cid = item["chunk_id"]
+            if cid in existing_chunk_ids:
+                continue
+            meta = item.get("metadata", {})
+            fp = meta.get("file_path", "")
+            if not entry_path_re.search(fp):
+                continue
+            chunk = self._chunk_cache.get(cid)
+            if chunk is None:
+                chunk = CodeChunk.from_chroma_metadata(
+                    chunk_id=cid,
+                    content=item["content"],
+                    meta=meta,
+                )
+            if chunk:
+                results.append(
+                    SearchResult(
+                        chunk=chunk,
+                        score=item.get("distance", 0.0),
+                        source="dense",
+                    )
+                )
         return results
 
     def search_raw(
@@ -255,7 +373,8 @@ class HybridSearchEngine:
         # Dense
         query_embedding = self.embedder.embed_query(processed.original)
         dense_raw = self.vector_store.search(
-            query_embedding, top_k=top_k * 3,
+            query_embedding,
+            top_k=top_k * 3,
         )
 
         # BM25
@@ -273,11 +392,13 @@ class HybridSearchEngine:
                     meta=item["metadata"],
                 )
             if chunk:
-                dense_results.append(SearchResult(
-                    chunk=chunk,
-                    score=item.get("distance", 0.0),
-                    source="dense",
-                ))
+                dense_results.append(
+                    SearchResult(
+                        chunk=chunk,
+                        score=item.get("distance", 0.0),
+                        source="dense",
+                    )
+                )
 
         bm25_results = []
         for chunk_id, score in bm25_raw:
@@ -285,11 +406,13 @@ class HybridSearchEngine:
             if chunk is None:
                 chunk = self._reconstruct_chunk(chunk_id, dense_raw)
             if chunk:
-                bm25_results.append(SearchResult(
-                    chunk=chunk,
-                    score=score,
-                    source="bm25",
-                ))
+                bm25_results.append(
+                    SearchResult(
+                        chunk=chunk,
+                        score=score,
+                        source="bm25",
+                    )
+                )
 
         return dense_results, bm25_results
 

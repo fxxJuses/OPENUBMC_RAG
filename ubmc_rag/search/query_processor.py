@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import difflib
 import re
 
 # 代码特征正则：检测运算符、括号、关键字等代码模式
@@ -165,6 +166,33 @@ class QueryProcessor:
     # 查询清洗时要移除的纯过滤关键词（有歧义的短词不移除）
     _CLEAN_STOPWORDS = {"json", "mds", "csr", "sr"}
 
+    # 从代码库符号名提取的高频领域术语（用于拼写纠错）
+    _DEFAULT_DOMAIN_TERMS: list[str] = [
+        "sensor", "sensors", "threshold", "config", "monitoring", "management",
+        "alert", "event", "logging", "function", "init", "initialize", "startup",
+        "power", "control", "ipmi", "ipmb", "protocol", "command", "fru",
+        "frudata", "fructrl", "devmon", "device", "vpd", "bios", "pcie", "mdb",
+        "bus", "i2c", "libipmi", "sel", "reading", "service", "model",
+        "application", "handler", "callback", "register", "subscribe", "publish",
+        "interface", "dependency", "dependencies", "component", "object",
+        "instance", "discrete", "metric", "voltage", "temperature", "firmware",
+        "upgrade", "capacitor", "circuit", "payload", "restore", "timeout",
+        "flag", "chassis", "state", "machine", "executor", "format", "policy",
+        "wrapper", "channel", "driver", "adapter", "message", "filter", "manager",
+        "root", "discovery",
+    ]
+
+    def __init__(self) -> None:
+        self._domain_terms: list[str] = list(self._DEFAULT_DOMAIN_TERMS)
+
+    def set_domain_terms(self, terms: list[str]) -> None:
+        """设置领域术语词典（替换默认词典）。
+
+        Args:
+            terms: 领域术语列表，用于拼写纠错匹配。
+        """
+        self._domain_terms = list(terms)
+
     def process(self, query: str) -> ProcessedQuery:
         """处理原始查询，返回包含分析和扩展的 ProcessedQuery 对象。
 
@@ -239,6 +267,21 @@ class QueryProcessor:
             if en_term_phrase.lower() in query.lower():
                 if zh_term not in query:
                     expanded.add(zh_term)
+
+        # 步骤 4: 拼写纠错——对不在词典中的英文 token 用 difflib 纠错
+        for token in english_tokens:
+            token_lower = token.lower()
+            # 跳过已在词典中的 token（拼写正确）或过短的 token
+            if token_lower in self._domain_terms or len(token_lower) < 3:
+                continue
+            matches = difflib.get_close_matches(
+                token_lower, self._domain_terms, n=1, cutoff=0.8
+            )
+            if matches:
+                correction = matches[0]
+                # 纠错结果不应已在查询中出现
+                if correction not in query.lower() and correction != token_lower:
+                    expanded.add(correction)
 
         return list(expanded)
 

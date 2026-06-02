@@ -35,7 +35,8 @@ PARTIAL_MULTIPLIER = 0.8    # 部分匹配时 bonus 打折
 _DEP_QUERY_RE = re.compile(
     r"依赖|dependency|dependencies|接口定义|interface|"
     r"组件.*关系|component.*dep|依赖关系|dep graph|"
-    r"service\.json|component info",
+    r"service\.json|component info|"
+    r"数据读取|数据访问|data.*read|数据流",
     re.IGNORECASE,
 )
 
@@ -278,7 +279,7 @@ class Reranker:
             if count >= self.config.diversity_max_per_file:
                 r = SearchResult(
                     chunk=r.chunk,
-                    score=r.score * 0.7,
+                    score=r.score * 0.5,
                     source=r.source,
                 )
             filtered.append(r)
