@@ -103,7 +103,7 @@ search:
   cross_encoder_model: "BAAI/bge-reranker-v2-m3"
   cross_encoder_device: "cpu"
   # DashScope qwen3-rerank (6-B, optional, requires DASHSCOPE_API_KEY)
-  dashscope_reranker_enabled: false
+  dashscope_reranker_enabled: true
   dashscope_reranker_model: "qwen3-rerank"
   dashscope_reranker_top_n: 20
   # LLM query rewriting (8, uses DashScope Qwen)

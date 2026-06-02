@@ -5,23 +5,28 @@
 统一的融合+排序模块。Reranker 接收原始的 Dense 和 BM25 SearchResult 列表，
 内部完成 RRF 融合、符号/路径/仓库匹配提升、多样性过滤。
 
+迭代9：增加 DashScope qwen3-rerank 作为可选的第三路 RRF 信号叠加。
+
 工作流程：
 1. RRF 融合 Dense + BM25 双路结果
-1.5. 同一文件最多保留 2 条去重
-2. 符号名精确匹配提升（加法 bonus）
-3. 仓库名匹配提升（加法 bonus）
-4. 文件路径匹配提升（加法 bonus）
-5. MDS 模型类名匹配提升（加法 bonus）
-6. 按提升后分数重新排序
-7. 同文件结果多样性降权
+2. （可选）DashScope reranker 排名作为第三路 RRF 信号叠加
+3. 符号名精确匹配提升（加法 bonus）
+4. 仓库名匹配提升（加法 bonus）
+5. 文件路径匹配提升（加法 bonus）
+6. MDS 模型类名匹配提升（加法 bonus）
+7. 按提升后分数重新排序
+8. 同文件结果多样性降权
 """
 
 from __future__ import annotations
 
+import logging
 import re
 
 from ubmc_rag.config.settings import SearchConfig
 from ubmc_rag.models.search_result import SearchResult
+
+logger = logging.getLogger(__name__)
 
 # H3: 加法 bonus 常量（对标乘法 boost 效果，适配 RRF 分值范围）
 SYMBOL_BONUS = 0.008  # 原 symbol_match_boost=1.5, 等效 +0.005-0.008
@@ -56,6 +61,17 @@ class Reranker:
 
     def __init__(self, config: SearchConfig):
         self.config = config
+        self._dashscope_reranker = None
+        if config.dashscope_reranker_enabled:
+            from ubmc_rag.search.dashscope_reranker import DashScopeReranker
+            self._dashscope_reranker = DashScopeReranker(
+                model=config.dashscope_reranker_model,
+            )
+            logger.info(
+                "DashScope reranker enabled: model=%s available=%s",
+                config.dashscope_reranker_model,
+                self._dashscope_reranker.is_available,
+            )
 
     def rrf_fuse(
         self,
@@ -171,10 +187,14 @@ class Reranker:
             # 仅 RRF + diversity，不做 boosting
             return self._apply_diversity(candidates)[:top_k]
 
-        # 步骤 2-3: 应用 boosting + 重排
+        # 步骤 2: 应用 boosting
         boosted = self._apply_boosts(candidates, query)
 
-        # 步骤 4: 多样性过滤
+        # 步骤 2.5: DashScope reranker 作为第三路 RRF 信号（可选，在 boosting 之后）
+        if self._dashscope_reranker is not None and self._dashscope_reranker.is_available:
+            boosted = self._apply_dashscope_signal(query, boosted)
+
+        # 步骤 3: 多样性过滤
         diversified = self._apply_diversity(boosted)
 
         return diversified[:top_k]
@@ -305,3 +325,60 @@ class Reranker:
 
         filtered.sort(key=lambda x: x.score, reverse=True)
         return filtered
+
+    def _apply_dashscope_signal(
+        self,
+        query: str,
+        candidates: list[SearchResult],
+        alpha: float = 0.6,
+    ) -> list[SearchResult]:
+        """将 DashScope reranker 分数与原始分数归一化加权融合。
+
+        不使用 RRF 信号叠加（信号太弱），而是将两路分数分别归一化到 [0,1]
+        后按 alpha 加权组合。alpha=0.6 表示原始分数权重 60%，DashScope 40%。
+        """
+        ds_ranked = self._dashscope_reranker.rerank(
+            query, candidates, top_n=self.config.dashscope_reranker_top_n,
+        )
+
+        # 构建 chunk_id → DashScope score 映射
+        ds_score_map: dict[str, float] = {}
+        for sr in ds_ranked:
+            ds_score_map[sr.chunk.chunk_id] = sr.score
+
+        if not ds_score_map:
+            return candidates
+
+        # 归一化原始分数到 [0, 1]
+        orig_scores = [sr.score for sr in candidates]
+        min_orig = min(orig_scores)
+        max_orig = max(orig_scores)
+        range_orig = max_orig - min_orig if max_orig > min_orig else 1.0
+
+        # 归一化 DashScope 分数到 [0, 1]
+        ds_scores = list(ds_score_map.values())
+        min_ds = min(ds_scores)
+        max_ds = max(ds_scores)
+        range_ds = max_ds - min_ds if max_ds > min_ds else 1.0
+
+        results = []
+        for sr in candidates:
+            orig_norm = (sr.score - min_orig) / range_orig
+            ds_score = ds_score_map.get(sr.chunk.chunk_id)
+            if ds_score is not None:
+                ds_norm = (ds_score - min_ds) / range_ds
+            else:
+                ds_norm = 0.0
+            combined = alpha * orig_norm + (1 - alpha) * ds_norm
+            results.append(SearchResult(
+                chunk=sr.chunk,
+                score=combined,
+                source=sr.source,
+            ))
+
+        results.sort(key=lambda x: x.score, reverse=True)
+        logger.debug(
+            "DashScope signal applied: %d candidates, alpha=%.2f",
+            len(results), alpha,
+        )
+        return results

@@ -48,17 +48,6 @@ def config():
     )
 
 
-@pytest.fixture
-def config_with_ce():
-    """Search config with cross-encoder enabled."""
-    return SearchConfig(
-        rrf_k=60,
-        bm25_weight=0.5,
-        dense_weight=0.5,
-        cross_encoder_enabled=True,
-        cross_encoder_model="BAAI/bge-reranker-v2-m3",
-        cross_encoder_device="cpu",
-    )
 
 
 def test_reranker_rrf_fuse(config):
@@ -115,32 +104,8 @@ def test_reranker_skip_boost(config):
     assert len(result) > 0
 
 
-def test_reranker_skip_cross_encoder(config_with_ce):
-    """Test skip_cross_encoder flag prevents CE from being used."""
-    reranker = Reranker(config_with_ce)
-
-    chunks = [
-        _make_chunk("1", "test content"),
-        _make_chunk("2", "other content"),
-    ]
-    dense = [_make_result(chunks[0], score=0.8, source="dense")]
-    bm25 = [_make_result(chunks[1], score=2.0, source="bm25")]
-
-    result = reranker.rerank(
-        dense_results=dense,
-        bm25_results=bm25,
-        query="test",
-        top_k=5,
-        skip_cross_encoder=True,
-    )
-
-    assert len(result) > 0
-    # cross-encoder should not have been initialized
-    assert reranker._cross_encoder is None
-
-
-def test_reranker_cross_encoder_disabled_by_default(config):
-    """When cross_encoder_enabled=False, CE is never initialized."""
+def test_reranker_dashscope_disabled_by_default(config):
+    """When dashscope_reranker_enabled=False, DS reranker is not initialized."""
     reranker = Reranker(config)
 
     chunks = [_make_chunk("1", "test")]
@@ -155,9 +120,22 @@ def test_reranker_cross_encoder_disabled_by_default(config):
     )
 
     assert len(result) > 0
-    # cross-encoder should not have been initialized
-    assert reranker._cross_encoder is None
-    assert reranker._cross_encoder_init_attempted is False
+    # DashScope reranker should not have been initialized
+    assert reranker._dashscope_reranker is None
+
+
+def test_reranker_dashscope_enabled():
+    """When dashscope_reranker_enabled=True, DS reranker is initialized."""
+    config = SearchConfig(
+        rrf_k=60,
+        bm25_weight=0.5,
+        dense_weight=0.5,
+        dashscope_reranker_enabled=True,
+    )
+    reranker = Reranker(config)
+
+    # DashScope reranker should be initialized (even without API key)
+    assert reranker._dashscope_reranker is not None
 
 
 def test_reranker_empty_input(config):

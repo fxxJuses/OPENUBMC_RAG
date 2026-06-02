@@ -15,6 +15,7 @@ Query + Candidates -> Cross-Encoder Model -> Reranked Scores -> Top-K
 from __future__ import annotations
 
 import logging
+import os
 from typing import Optional
 
 from ubmc_rag.models.search_result import SearchResult
@@ -65,6 +66,9 @@ class CrossEncoderReranker:
 
         if _ST_AVAILABLE:
             try:
+                # 默认使用 HuggingFace 镜像加速模型下载
+                if not os.environ.get("HF_ENDPOINT"):
+                    os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
                 self.model = STCrossEncoder(
                     model_name,
                     device=device,
@@ -161,7 +165,6 @@ class CrossEncoderReranker:
         """
         import re
 
-        query_lower = query.lower()
         query_tokens = set(
             t.lower() for t in re.findall(r'[a-zA-Z_]\w*', query) if len(t) > 1
         )

@@ -1,14 +1,17 @@
-"""检索评估器：对 HybridSearchEngine 五种搜索模式运行回归评测。
+"""检索评估器：对 HybridSearchEngine 多种搜索模式运行回归评测。
 
-支持五种搜索模式，用于 A/B 对比各检索路径的效果：
+支持七种搜索模式，用于 A/B 对比各检索路径的效果：
 - "bm25_only": 仅 BM25 关键词检索
 - "dense_only": 仅向量语义检索
 - "hybrid": RRF 融合，不经过 Reranker boosting
 - "hybrid_reranked": 完整管线（默认，与生产环境一致）
-- "hybrid_cross_encoder": 完整管线 + BGE-reranker-v2-m3 交叉编码器重排序
+- "hybrid_cross_encoder": RRF + BGE-reranker-v2-m3 交叉编码器重排序
+- "hybrid_dashscope": RRF + DashScope qwen3-rerank 云端重排序
+- "hybrid_full": 完整管线（LLM 重写 + RRF + DashScope 重排序）
 
 迭代5：_search_hybrid_no_rerank 改用 Reranker.rrf_fuse() 获取仅融合结果。
 迭代6-P0：增加 hybrid_cross_encoder 模式，评估交叉编码器真实效果。
+迭代9：增加 hybrid_dashscope 和 hybrid_full 模式。
 """
 
 from __future__ import annotations
@@ -23,11 +26,12 @@ from evaluation.retrieval.metrics import (
     compute_metrics,
     evaluate_case,
 )
-from ubmc_rag.config.settings import AppConfig
+from ubmc_rag.config.settings import AppConfig, SearchConfig
 from ubmc_rag.indexing.index_manager import IndexManager
 from ubmc_rag.models.code_chunk import CodeChunk
 from ubmc_rag.models.search_result import SearchResult
 from ubmc_rag.search.cross_encoder import CrossEncoderReranker
+from ubmc_rag.search.dashscope_reranker import DashScopeReranker
 from ubmc_rag.search.hybrid_search import HybridSearchEngine
 
 logger = logging.getLogger(__name__)
@@ -67,6 +71,9 @@ class RetrievalEvaluator:
 
         # 交叉编码器（延迟初始化）
         self._cross_encoder: Optional[CrossEncoderReranker] = None
+
+        # DashScope 重排序器（延迟初始化）
+        self._dashscope_reranker: Optional[DashScopeReranker] = None
 
     def evaluate(
         self,
@@ -137,6 +144,12 @@ class RetrievalEvaluator:
 
         if search_mode == "hybrid_cross_encoder":
             return self._search_hybrid_cross_encoder(query, top_k)
+
+        if search_mode == "hybrid_dashscope":
+            return self._search_hybrid_dashscope(query, top_k)
+
+        if search_mode == "hybrid_full":
+            return self._search_hybrid_full(query, top_k)
 
         if search_mode == "hybrid":
             return self._search_hybrid_no_rerank(query, top_k)
@@ -254,3 +267,99 @@ class RetrievalEvaluator:
             content=item.get("content", ""),
             meta=item.get("metadata", {}),
         )
+
+    def _search_hybrid_dashscope(self, query: str, top_k: int) -> list[SearchResult]:
+        """RRF + DashScope qwen3-rerank 云端重排序。
+
+        流程：search_raw → RRF → boosting → DashScope rank 作为第三路 RRF 信号叠加。
+        DashScope 的排名不替换 RRF 分数，而是作为额外加分，避免分数尺度不匹配。
+        """
+        search_config = self.config.search
+
+        dense_results, bm25_results = self.engine.search_raw(query, top_k=top_k)
+
+        rrf_results = self.engine.reranker.rrf_fuse(
+            dense_results,
+            bm25_results,
+            bm25_weight=search_config.bm25_weight,
+            dense_weight=search_config.dense_weight,
+        )
+
+        candidate_count = min(top_k * 3, len(rrf_results))
+        candidates = rrf_results[:candidate_count]
+
+        # boosting 在 RRF 分数基础上
+        boosted = self.engine.reranker._apply_boosts(candidates, query)
+
+        # DashScope reranker 作为第三路信号叠加
+        boosted = self._apply_dashscope_signal(query, boosted, search_config)
+
+        # diversity
+        diversified = self.engine.reranker._apply_diversity(boosted)
+
+        return diversified[:top_k]
+
+    def _search_hybrid_full(self, query: str, top_k: int) -> list[SearchResult]:
+        """完整管线：LLM 查询重写 + RRF + DashScope 重排序。
+
+        流程：search()（含 LLM 重写注入）→ DashScope rank 叠加 → diversity。
+        DashScope 排名作为额外 RRF 信号，不覆盖原始分数。
+        """
+        search_config = self.config.search
+
+        # search() 包含 LLM 重写 + RRF + boosting
+        candidates = self.engine.search(query, top_k=top_k * 3)
+
+        # DashScope reranker 作为第三路信号叠加
+        results = self._apply_dashscope_signal(query, candidates, search_config)
+
+        # diversity
+        diversified = self.engine.reranker._apply_diversity(results)
+
+        return diversified[:top_k]
+
+    def _apply_dashscope_signal(
+        self,
+        query: str,
+        candidates: list[SearchResult],
+        search_config: SearchConfig,
+        rrf_weight: float = 0.4,
+        rrf_k: int = 60,
+    ) -> list[SearchResult]:
+        """将 DashScope 排名作为第三路 RRF 信号叠加到现有分数。
+
+        不替换原始分数，而是额外加上 ds_weight / (rrf_k + ds_rank + 1)。
+        这样保持了 RRF + boosting 的信号，同时融入了 DashScope 的语义判断。
+        """
+        if self._dashscope_reranker is None:
+            self._dashscope_reranker = DashScopeReranker(
+                model=search_config.dashscope_reranker_model,
+            )
+
+        if not self._dashscope_reranker.is_available:
+            return candidates
+
+        ds_ranked = self._dashscope_reranker.rerank(
+            query, candidates, top_n=search_config.dashscope_reranker_top_n,
+        )
+
+        # 构建 chunk_id → DashScope rank 映射
+        ds_rank_map: dict[str, int] = {}
+        for rank, sr in enumerate(ds_ranked):
+            ds_rank_map[sr.chunk.chunk_id] = rank
+
+        # 叠加 DashScope RRF 信号
+        results = []
+        for sr in candidates:
+            ds_rank = ds_rank_map.get(sr.chunk.chunk_id)
+            bonus = 0.0
+            if ds_rank is not None:
+                bonus = rrf_weight / (rrf_k + ds_rank + 1)
+            results.append(SearchResult(
+                chunk=sr.chunk,
+                score=sr.score + bonus,
+                source=sr.source,
+            ))
+
+        results.sort(key=lambda x: x.score, reverse=True)
+        return results
