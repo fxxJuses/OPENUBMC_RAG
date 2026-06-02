@@ -25,6 +25,7 @@ from ubmc_rag.indexing.vector_store import VectorStore
 from ubmc_rag.models.code_chunk import CodeChunk
 from ubmc_rag.models.search_result import SearchResult
 from ubmc_rag.search.query_processor import QueryProcessor
+from ubmc_rag.search.query_rewriter import LLMQueryRewriter
 from ubmc_rag.search.reranker import Reranker
 
 logger = logging.getLogger(__name__)
@@ -78,6 +79,9 @@ class HybridSearchEngine:
         self.query_processor = QueryProcessor()
         self.reranker = Reranker(config.search)
         self._chunk_cache: dict[str, CodeChunk] = {}
+        self._rewriter: LLMQueryRewriter | None = None
+        if config.search.llm_query_rewrite_enabled:
+            self._rewriter = LLMQueryRewriter(model=config.search.llm_query_rewrite_model)
 
     def set_chunk_index(self, chunks: list[CodeChunk]) -> None:
         """设置分块查找索引，用于从搜索结果重建 CodeChunk 对象。"""
@@ -178,6 +182,42 @@ class HybridSearchEngine:
                         source="bm25",
                     )
                 )
+
+        # --- LLM 查询重写：额外 Dense 检索并注入候选 ---
+        if self._rewriter:
+            rewritten = self._rewriter.rewrite(query)
+            if rewritten and rewritten.lower() != query.lower():
+                rewrite_embedding = self.embedder.embed_query(rewritten)
+                rewrite_raw = self.vector_store.search(rewrite_embedding, top_k=top_k * 2)
+                existing_ids = {r.chunk.chunk_id for r in dense_results}
+                injected = 0
+                insert_pos = min(10, len(dense_results))
+                for item in rewrite_raw:
+                    cid = item["chunk_id"]
+                    if cid in existing_ids:
+                        continue
+                    chunk = self._chunk_cache.get(cid)
+                    if chunk is None:
+                        chunk = CodeChunk.from_chroma_metadata(
+                            chunk_id=cid,
+                            content=item["content"],
+                            meta=item["metadata"],
+                        )
+                    if chunk:
+                        dense_results.insert(
+                            insert_pos + injected,
+                            SearchResult(
+                                chunk=chunk,
+                                score=item.get("distance", 0.0),
+                                source="dense",
+                            ),
+                        )
+                        existing_ids.add(cid)
+                        injected += 1
+                        if injected >= 3:
+                            break
+                if injected:
+                    logger.debug("Injected %d LLM-rewritten Dense candidates", injected)
 
         # --- 定向补充：依赖/接口类查询注入 service.json 候选 ---
         if self._is_dependency_query(query, processed.expanded):

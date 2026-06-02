@@ -106,6 +106,9 @@ search:
   dashscope_reranker_enabled: false
   dashscope_reranker_model: "qwen3-rerank"
   dashscope_reranker_top_n: 20
+  # LLM query rewriting (8, uses DashScope Qwen)
+  llm_query_rewrite_enabled: true
+  llm_query_rewrite_model: "qwen-plus"
 
 # MCP server configuration
 mcp:

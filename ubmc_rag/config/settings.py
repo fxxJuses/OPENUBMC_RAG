@@ -191,6 +191,9 @@ class SearchConfig(BaseModel):
     dashscope_reranker_enabled: bool = False
     dashscope_reranker_model: str = "qwen3-rerank"
     dashscope_reranker_top_n: int = 20
+    # LLM 查询重写配置 (迭代8)
+    llm_query_rewrite_enabled: bool = True
+    llm_query_rewrite_model: str = "qwen-plus"
 
 
 class MCPConfig(BaseModel):
