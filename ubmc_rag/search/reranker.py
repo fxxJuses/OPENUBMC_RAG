@@ -24,12 +24,14 @@ from ubmc_rag.config.settings import SearchConfig
 from ubmc_rag.models.search_result import SearchResult
 
 # H3: 加法 bonus 常量（对标乘法 boost 效果，适配 RRF 分值范围）
-SYMBOL_BONUS = 0.008        # 原 symbol_match_boost=1.5, 等效 +0.005-0.008
-FILEPATH_BONUS = 0.006      # 原 filepath_match_boost=1.3, 等效 +0.003-0.005
-REPO_BONUS = 0.006          # 仓库名匹配奖励
-MDS_MODEL_BONUS = 0.012     # 原 mds_model_match_boost=2.0, 等效 +0.01-0.015
-MDS_SERVICE_BONUS = 0.010   # 依赖/接口查询时 mds_service 分块额外奖励
-PARTIAL_MULTIPLIER = 0.8    # 部分匹配时 bonus 打折
+SYMBOL_BONUS = 0.008  # 原 symbol_match_boost=1.5, 等效 +0.005-0.008
+SYMBOL_EXACT_BONUS = 0.025  # 查询本身就是符号名时的精确匹配奖励
+FILEPATH_BONUS = 0.006  # 原 filepath_match_boost=1.3, 等效 +0.003-0.005
+FILENAME_EXACT_BONUS = 0.020  # 查询 token 与文件基名精确匹配奖励
+REPO_BONUS = 0.006  # 仓库名匹配奖励
+MDS_MODEL_BONUS = 0.012  # 原 mds_model_match_boost=2.0, 等效 +0.01-0.015
+MDS_SERVICE_BONUS = 0.010  # 依赖/接口查询时 mds_service 分块额外奖励
+PARTIAL_MULTIPLIER = 0.8  # 部分匹配时 bonus 打折
 
 # 依赖/接口查询关键词（与 hybrid_search.py 保持一致）
 _DEP_QUERY_RE = re.compile(
@@ -109,11 +111,13 @@ class Reranker:
                 score += dense_w / (rrf_k + info["dense_rank"] + 1)
             if info["bm25_rank"] is not None:
                 score += bm25_w / (rrf_k + info["bm25_rank"] + 1)
-            rrf_results.append(SearchResult(
-                chunk=info["chunk"],
-                score=score,
-                source="hybrid",
-            ))
+            rrf_results.append(
+                SearchResult(
+                    chunk=info["chunk"],
+                    score=score,
+                    source="hybrid",
+                )
+            )
 
         rrf_results.sort(key=lambda x: x.score, reverse=True)
         return rrf_results
@@ -154,7 +158,8 @@ class Reranker:
 
         # 步骤 1: RRF 融合（取 top_k * 3 候选给后续 boosting）
         fused = self.rrf_fuse(
-            dense_results, bm25_results,
+            dense_results,
+            bm25_results,
             bm25_weight=bm25_weight,
             dense_weight=dense_weight,
         )
@@ -175,7 +180,9 @@ class Reranker:
         return diversified[:top_k]
 
     def _apply_boosts(
-        self, results: list[SearchResult], query: str,
+        self,
+        results: list[SearchResult],
+        query: str,
     ) -> list[SearchResult]:
         """对搜索结果应用多维提升规则（加法 bonus）。
 
@@ -194,12 +201,11 @@ class Reranker:
         """
         query_lower = query.lower()
 
-
         # 提取查询中的标识符 token
         query_tokens: set[str] = set()
-        for token in re.findall(r'[a-zA-Z_]\w*', query_lower):
+        for token in re.findall(r"[a-zA-Z_]\w*", query_lower):
             query_tokens.add(token)
-        for token in re.findall(r'\b[a-zA-Z_]{1,2}\b', query_lower):
+        for token in re.findall(r"\b[a-zA-Z_]{1,2}\b", query_lower):
             query_tokens.add(token)
 
         boosted = []
@@ -212,7 +218,10 @@ class Reranker:
                 if sym_lower in query_lower or any(
                     t in sym_lower for t in query_tokens if len(t) >= 3
                 ):
-                    bonus += SYMBOL_BONUS
+                    if query.strip().lower() == sym_lower or query_lower == sym_lower:
+                        bonus += SYMBOL_EXACT_BONUS
+                    else:
+                        bonus += SYMBOL_BONUS
                     break
 
             # 2. 仓库名匹配提升
@@ -227,17 +236,23 @@ class Reranker:
             if file_path_lower in query_lower:
                 bonus += FILEPATH_BONUS
             else:
-                path_parts: set[str] = set()
-                for part in re.split(r'[/_.-]', file_path_lower):
-                    if part:
-                        path_parts.add(part)
-                matched_parts = sum(
-                    1 for p in path_parts if p in query_tokens or p in query_lower
-                )
-                if matched_parts >= 2:
-                    bonus += FILEPATH_BONUS
-                elif matched_parts == 1:
-                    bonus += FILEPATH_BONUS * PARTIAL_MULTIPLIER
+                # 3a. 文件基名精确匹配（查询 token = 文件名 stem）
+                # 仅对复合标识符（含下划线）或长名称（>=8字符）生效，避免短名误匹配
+                basename = file_path_lower.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+                if basename in query_tokens and ("_" in basename or len(basename) >= 8):
+                    bonus += FILENAME_EXACT_BONUS
+                else:
+                    path_parts: set[str] = set()
+                    for part in re.split(r"[/_.-]", file_path_lower):
+                        if part:
+                            path_parts.add(part)
+                    matched_parts = sum(
+                        1 for p in path_parts if p in query_tokens or p in query_lower
+                    )
+                    if matched_parts >= 2:
+                        bonus += FILEPATH_BONUS
+                    elif matched_parts == 1:
+                        bonus += FILEPATH_BONUS * PARTIAL_MULTIPLIER
 
             # 4. MDS 模型类名匹配提升
             mds_class = r.chunk.metadata.get("mds_class", "")
@@ -248,17 +263,20 @@ class Reranker:
             if r.chunk.chunk_type == "mds_service" and _DEP_QUERY_RE.search(query_lower):
                 bonus += MDS_SERVICE_BONUS
 
-            boosted.append(SearchResult(
-                chunk=r.chunk,
-                score=r.score + bonus,
-                source=r.source,
-            ))
+            boosted.append(
+                SearchResult(
+                    chunk=r.chunk,
+                    score=r.score + bonus,
+                    source=r.source,
+                )
+            )
 
         boosted.sort(key=lambda x: x.score, reverse=True)
         return boosted
 
     def _apply_diversity(
-        self, results: list[SearchResult],
+        self,
+        results: list[SearchResult],
     ) -> list[SearchResult]:
         """应用多样性过滤：同一文件的超出部分降权。
 

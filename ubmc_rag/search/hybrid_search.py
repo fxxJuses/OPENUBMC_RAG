@@ -280,7 +280,7 @@ class HybridSearchEngine:
         优先从 _chunk_cache 中查找 file_path 匹配的 chunk，按向量相似度排序；
         若缓存不足则降级到 vector_store.search 检索后 Python 过滤。
         """
-        entry_path_re = re.compile(r"(^|/)main\.cpp$|_app\.lua$")
+        entry_path_re = re.compile(r"(^|/)main\.(cpp|lua)$|_app\.lua$")
         candidates: list[tuple[CodeChunk, float]] = []
 
         # 优先从 _chunk_cache 中按 file_path 筛选
