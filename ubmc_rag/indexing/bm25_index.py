@@ -56,10 +56,13 @@ class BM25Index:
         self.b = b
 
     def _build_document(self, chunk: CodeChunk) -> str:
-        """H4: 构建 BM25 文档内容。
+        """构建 BM25 文档内容。
 
         在原代码内容基础上拼接文件路径、仓库名（重复以增加权重）
         和符号名，使 BM25 可以通过路径/仓库/符号名匹配结果。
+
+        对 mds_service 类型分块，额外拼接依赖和接口名称，
+        使 BM25 可通过 "依赖了X" 类查询命中 service.json。
         """
         parts = [chunk.content]
         # 文件路径：分词后可匹配文件名和目录名
@@ -70,6 +73,20 @@ class BM25Index:
         # 符号名（函数名、类名、变量名等）
         for sym in chunk.symbols:
             parts.append(sym.name)
+
+        # service.json 增强：将依赖和接口名称加入 BM25 文档
+        if chunk.chunk_type == "mds_service":
+            deps = chunk.metadata.get("dependencies", [])
+            ifaces = chunk.metadata.get("required_interfaces", [])
+            if deps:
+                parts.append(" ".join(deps))
+            if ifaces:
+                parts.append(" ".join(ifaces))
+            # 服务名额外重复一次增强匹配
+            svc_name = chunk.metadata.get("service_name", "")
+            if svc_name:
+                parts.append(svc_name)
+
         return " ".join(parts)
 
     def build(self, chunks: list[CodeChunk]) -> None:

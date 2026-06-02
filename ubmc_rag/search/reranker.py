@@ -7,6 +7,7 @@
 
 工作流程：
 1. RRF 融合 Dense + BM25 双路结果
+1.5. 同一文件最多保留 2 条去重
 2. 符号名精确匹配提升（加法 bonus）
 3. 仓库名匹配提升（加法 bonus）
 4. 文件路径匹配提升（加法 bonus）
@@ -17,6 +18,8 @@
 
 from __future__ import annotations
 
+import re
+
 from ubmc_rag.config.settings import SearchConfig
 from ubmc_rag.models.search_result import SearchResult
 
@@ -25,7 +28,16 @@ SYMBOL_BONUS = 0.008        # 原 symbol_match_boost=1.5, 等效 +0.005-0.008
 FILEPATH_BONUS = 0.006      # 原 filepath_match_boost=1.3, 等效 +0.003-0.005
 REPO_BONUS = 0.006          # 仓库名匹配奖励
 MDS_MODEL_BONUS = 0.012     # 原 mds_model_match_boost=2.0, 等效 +0.01-0.015
+MDS_SERVICE_BONUS = 0.010   # 依赖/接口查询时 mds_service 分块额外奖励
 PARTIAL_MULTIPLIER = 0.8    # 部分匹配时 bonus 打折
+
+# 依赖/接口查询关键词（与 hybrid_search.py 保持一致）
+_DEP_QUERY_RE = re.compile(
+    r"依赖|dependency|dependencies|接口定义|interface|"
+    r"组件.*关系|component.*dep|依赖关系|dep graph|"
+    r"service\.json|component info",
+    re.IGNORECASE,
+)
 
 
 class Reranker:
@@ -115,10 +127,11 @@ class Reranker:
         dense_weight: float | None = None,
         skip_boost: bool = False,
     ) -> list[SearchResult]:
-        """对双路检索结果执行 RRF 融合 + 重排序。
+        """对双路检索结果执行 RRF 融合 + 去重 + 重排序。
 
         处理步骤：
         1. RRF 融合 Dense + BM25 结果
+        1.5. 同一文件最多保留 2 条去重（释放槽位给更多唯一文件）
         2. 如果未 skip_boost：应用符号名、仓库名、文件路径、MDS 模型匹配提升
         3. 按提升后分数重新排序
         4. 同一文件的重复结果降权（超过 diversity_max_per_file 的结果分数 ×0.7）
@@ -178,9 +191,8 @@ class Reranker:
         Returns:
             提升并重排后的结果列表
         """
-        import re
-
         query_lower = query.lower()
+
 
         # 提取查询中的标识符 token
         query_tokens: set[str] = set()
@@ -230,6 +242,10 @@ class Reranker:
             mds_class = r.chunk.metadata.get("mds_class", "")
             if mds_class and mds_class.lower() in query_lower:
                 bonus += MDS_MODEL_BONUS
+
+            # 5. mds_service 分块在依赖/接口查询时的额外提升
+            if r.chunk.chunk_type == "mds_service" and _DEP_QUERY_RE.search(query_lower):
+                bonus += MDS_SERVICE_BONUS
 
             boosted.append(SearchResult(
                 chunk=r.chunk,

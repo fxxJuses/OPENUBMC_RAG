@@ -64,6 +64,7 @@ class JsonParser(BaseParser):
 
         # 提取依赖项符号
         deps = data.get("dependencies", [])
+        dep_names: list[str] = []
         if isinstance(deps, list):
             for dep in deps:
                 dep_name = dep if isinstance(dep, str) else dep.get("name", "")
@@ -72,16 +73,49 @@ class JsonParser(BaseParser):
                         name=dep_name, kind="dependency",
                         line_start=1, line_end=1, language="json",
                     ))
+                    dep_names.append(dep_name)
+        elif isinstance(deps, dict):
+            # 新格式: {"build": [...], "test": [...]}
+            for _category, items in deps.items():
+                if not isinstance(items, list):
+                    continue
+                for item in items:
+                    if isinstance(item, str):
+                        name = item.split("/")[0]
+                        dep_names.append(name)
+                        symbols.append(Symbol(
+                            name=name, kind="dependency",
+                            line_start=1, line_end=1, language="json",
+                        ))
+                    elif isinstance(item, dict):
+                        conan = item.get("conan", "")
+                        if conan:
+                            name = conan.split("/")[0]
+                            dep_names.append(name)
+                            symbols.append(Symbol(
+                                name=name, kind="dependency",
+                                line_start=1, line_end=1, language="json",
+                            ))
 
         # 提取所需接口符号
         required = data.get("required", [])
+        iface_names: list[str] = []
         if isinstance(required, list):
             for iface in required:
                 if isinstance(iface, str):
+                    iface_names.append(iface)
                     symbols.append(Symbol(
                         name=iface, kind="interface",
                         line_start=1, line_end=1, language="json",
                     ))
+                elif isinstance(iface, dict):
+                    iface_name = iface.get("interface", "")
+                    if iface_name:
+                        iface_names.append(iface_name)
+                        symbols.append(Symbol(
+                            name=iface_name, kind="interface",
+                            line_start=1, line_end=1, language="json",
+                        ))
 
         metadata = {
             "service_name": data.get("name", ""),

@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Optional
 
 from ubmc_rag.config.settings import AppConfig
@@ -25,6 +26,14 @@ from ubmc_rag.search.query_processor import QueryProcessor
 from ubmc_rag.search.reranker import Reranker
 
 logger = logging.getLogger(__name__)
+
+# 依赖/接口相关查询关键词 —— 触发 service.json 定向检索
+_DEPENDENCY_QUERY_RE = re.compile(
+    r"依赖|dependency|dependencies|接口定义|interface|"
+    r"组件.*关系|component.*dep|依赖关系|dep graph|"
+    r"service\.json|component info",
+    re.IGNORECASE,
+)
 
 
 class HybridSearchEngine:
@@ -155,6 +164,23 @@ class HybridSearchEngine:
                     source="bm25",
                 ))
 
+        # --- 定向补充：依赖/接口类查询注入 service.json 候选 ---
+        if self._is_dependency_query(query, processed.expanded):
+            existing_ids = {r.chunk.chunk_id for r in dense_results}
+            svc_results = self._retrieve_mds_service(query_embedding, existing_ids)
+            if svc_results and dense_results:
+                # 注入 Dense 结果前部（rank 5），确保 RRF 融合获得较高权重
+                insert_pos = min(5, len(dense_results))
+                for i, r in enumerate(svc_results[:3]):
+                    dense_results.insert(insert_pos + i, r)
+                # 同步注入 BM25 结果前部，使这些 chunk 在双路都有 RRF 贡献
+                bm25_insert = min(10, len(bm25_results))
+                for i, r in enumerate(svc_results[:3]):
+                    bm25_results.insert(bm25_insert + i, SearchResult(
+                        chunk=r.chunk, score=10.0, source="bm25",
+                    ))
+                logger.debug("Injected %d mds_service candidates", len(svc_results[:3]))
+
         # --- 计算 RRF 权重 ---
         bm25_w = search_config.bm25_weight
         dense_w = search_config.dense_weight
@@ -172,6 +198,33 @@ class HybridSearchEngine:
             bm25_weight=bm25_w,
             dense_weight=dense_w,
         )
+
+    def _is_dependency_query(self, query: str, expanded: str) -> bool:
+        """检测查询是否涉及依赖/接口关系（触发 service.json 定向检索）。"""
+        return bool(_DEPENDENCY_QUERY_RE.search(query) or _DEPENDENCY_QUERY_RE.search(expanded))
+
+    def _retrieve_mds_service(
+        self, query_embedding: list[float], existing_chunk_ids: set[str],
+    ) -> list[SearchResult]:
+        """定向检索 mds_service 分块，补充依赖/接口类查询的候选池。"""
+        raw = self.vector_store.search(
+            query_embedding, top_k=10, where={"chunk_type": "mds_service"},
+        )
+        results = []
+        for item in raw:
+            cid = item["chunk_id"]
+            if cid in existing_chunk_ids:
+                continue
+            chunk = self._chunk_cache.get(cid)
+            if chunk is None:
+                chunk = CodeChunk.from_chroma_metadata(
+                    chunk_id=cid, content=item["content"], meta=item["metadata"],
+                )
+            if chunk:
+                results.append(SearchResult(
+                    chunk=chunk, score=item.get("distance", 0.0), source="dense",
+                ))
+        return results
 
     def search_raw(
         self,
