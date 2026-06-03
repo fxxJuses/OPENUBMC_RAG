@@ -16,34 +16,12 @@ from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_openai import ChatOpenAI
 
+from ubmc_rag.prompts import PromptLibrary
+
 logger = logging.getLogger(__name__)
 
 _DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 _DEFAULT_MODEL = "qwen-plus"
-
-_AGENT_SYSTEM_PROMPT = """\
-你是 openUBMC 代码助手，专门帮助开发者理解 openUBMC 微组件架构的代码。
-
-## 工作策略
-1. 先分析用户问题，判断是否需要检索代码
-   - 需要检索：涉及具体代码、函数、组件、架构细节
-   - 不需要检索：基于已检索结果的追问（如画图、进一步解释）、纯概念讨论
-2. 根据问题选择合适的工具和查询词，可以多次调用不同工具后再回答
-3. 如果之前的对话历史中已有相关检索结果，可以直接基于上下文回答
-
-## 基本规则
-1. 引用代码时标注文件路径和行号，格式：`repo_name/file_path:start_line`
-2. 用中文回答，代码保持原文
-3. 解释代码时结合 openUBMC 的微组件架构背景（MDS 模型、MDB 接口、组件间 RPC 通信等）
-
-## 证据约束（严格遵守）
-4. 每个事实性论断必须标注来源，格式：论断内容 [Source N]
-5. 只根据检索到的代码回答，不要使用你的先验知识进行推测
-6. 如果检索结果不足以回答问题，明确说"根据检索到的代码，无法确定"并建议用户用更具体的关键词搜索
-7. 不要编写假设性或示例性代码。如果要说明某个机制，只引用源码中实际存在的代码
-8. 不要对组件之间的关系做推理，除非源码中有明确的调用、require、import 等直接证据
-"""
-
 
 def create_llm(api_key: str | None = None, model: str = _DEFAULT_MODEL) -> ChatOpenAI:
     """创建 DashScope Qwen LLM 实例。
@@ -164,12 +142,19 @@ def run_chat(
     index_mgr = IndexManager(config)
     index_mgr.load_index()
 
+    # 尝试加载文档索引
+    docs_loaded = index_mgr.load_docs_index()
+    if docs_loaded:
+        n = len(index_mgr.get_all_docs_chunks())
+        console.print(f"[green]Loaded docs index: {n} doc chunks[/green]")
+
     # 创建 Agent
     tools = create_tools(retriever.engine, index_mgr)
+    prompt_lib = PromptLibrary()
     agent = create_agent(
         model=llm,
         tools=tools,
-        system_prompt=_AGENT_SYSTEM_PROMPT,
+        system_prompt=prompt_lib.get_system_prompt(),
     )
 
     if debug:

@@ -1,6 +1,7 @@
 """CLI 命令：ubmc-rag index —— 构建或更新搜索索引。
 
 完整流程：同步仓库 → 解析代码 → 生成分块 → 构建向量索引 + BM25 索引。
+代码仓库和文档仓库分别索引到独立的 collection。
 """
 
 from __future__ import annotations
@@ -54,7 +55,6 @@ def register(app: typer.Typer):
         )
 
         if not repo_paths:
-            # 尝试使用已克隆的仓库
             repo_paths = git_sync.list_cloned_repos()
             if repo_names:
                 repo_paths = [p for p in repo_paths if p.name in repo_names]
@@ -67,24 +67,48 @@ def register(app: typer.Typer):
 
         console.print(f"Found {len(repo_paths)} repos to index")
 
-        # 解析代码并生成分块
-        chunker = Chunker(config)
-        all_chunks = chunker.parse_repos(repo_paths)
+        # 分离代码仓库和文档仓库
+        code_paths = [p for p in repo_paths if p.name != "docs"]
+        docs_paths = [p for p in repo_paths if p.name == "docs"]
 
-        if not all_chunks:
-            console.print(
-                "[red]No chunks produced. Check file filters.[/red]"
-            )
-            raise typer.Exit(1)
-
-        console.print(f"Produced {len(all_chunks)} chunks")
-
-        # 构建索引
         index_mgr = IndexManager(config)
-        index_mgr.build_index(all_chunks, full_rebuild=full_rebuild)
+
+        # 索引代码仓库
+        if code_paths:
+            chunker = Chunker(config)
+            all_chunks = chunker.parse_repos(code_paths)
+
+            if not all_chunks:
+                console.print(
+                    "[yellow]No code chunks produced. Check file filters.[/yellow]"
+                )
+            else:
+                console.print(f"Produced {len(all_chunks)} code chunks")
+                index_mgr.build_index(all_chunks, full_rebuild=full_rebuild)
+
+        # 索引文档仓库（只解析 docs/ 子目录，排除项目根目录配置文件）
+        if docs_paths:
+            console.print("\n[bold cyan]Indexing documentation...[/bold cyan]")
+            chunker = Chunker(config)
+            # 只解析 docs 仓库的 docs/ 子目录（VitePress 文档内容）
+            docs_subdirs = [p / "docs" for p in docs_paths if (p / "docs").exists()]
+            if not docs_subdirs:
+                docs_subdirs = docs_paths
+            docs_chunks = chunker.parse_repos(docs_subdirs)
+
+            if not docs_chunks:
+                console.print(
+                    "[yellow]No doc chunks produced. Check file filters.[/yellow]"
+                )
+            else:
+                console.print(f"Produced {len(docs_chunks)} doc chunks")
+                index_mgr.build_docs_index(docs_chunks, full_rebuild=full_rebuild)
 
         stats = index_mgr.get_stats()
-        console.print("[green]Index built successfully![/green]")
-        console.print(f"  Chunks: {stats['total_chunks']}")
-        console.print(f"  ChromaDB: {stats['chroma_count']}")
-        console.print(f"  BM25 docs: {stats['bm25_docs']}")
+        console.print("\n[green]Index built successfully![/green]")
+        console.print(f"  Code chunks: {stats['code_chunks']}")
+        console.print(f"  Code ChromaDB: {stats['chroma_count']}")
+        console.print(f"  Code BM25 docs: {stats['bm25_docs']}")
+        console.print(f"  Doc chunks: {stats['docs_chunks']}")
+        console.print(f"  Doc ChromaDB: {stats['docs_chroma_count']}")
+        console.print(f"  Doc BM25 docs: {stats['docs_bm25_docs']}")

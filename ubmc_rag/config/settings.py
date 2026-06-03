@@ -133,7 +133,8 @@ class IndexingConfig(BaseModel):
         embedding_provider: 嵌入服务提供方，目前仅支持 "dashscope"
         embedding_dim: 嵌入向量的维度
         dashscope_api_key: DashScope API 密钥，为空则从环境变量读取
-        chroma_collection: ChromaDB 中的集合名称
+        chroma_collection: 代码 ChromaDB 集合名称
+        docs_collection: 文档 ChromaDB 集合名称
         bm25_k1: BM25 的词频饱和参数 k1
         bm25_b: BM25 的文档长度归一化参数 b
     """
@@ -143,6 +144,7 @@ class IndexingConfig(BaseModel):
     embedding_dim: int = 1024
     dashscope_api_key: str = ""
     chroma_collection: str = "openubmc_code"
+    docs_collection: str = "openubmc_docs"
     bm25_k1: float = 1.5
     bm25_b: float = 0.75
 

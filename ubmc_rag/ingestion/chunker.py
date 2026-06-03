@@ -98,6 +98,8 @@ class Chunker:
                     c.file_path = c.file_path[len(rel_prefix):]
                 elif c.file_path.startswith(str(repo_path)):
                     c.file_path = str(Path(c.file_path).relative_to(repo_path))
+            # 过滤掉内容过短的 chunk（<30 字符的空标题节）
+            chunks = [c for c in chunks if len(c.content.strip()) >= 30]
             all_chunks.extend(chunks)
 
         logger.info(

@@ -1,0 +1,149 @@
+{
+  "summary": {
+    "avg_solution_quality": 6.6,
+    "avg_localization": 5.5,
+    "avg_completeness": 6.1,
+    "avg_evidence_reliability": 4.4,
+    "avg_overall_score": 5.76,
+    "pass_rate": 0.4,
+    "avg_tool_calls": 4.4,
+    "hallucination_rate": 0.56,
+    "total_cases": 10
+  },
+  "per_case": [
+    {
+      "id": "TC-003",
+      "query": "传感器阈值设置的实现",
+      "score": 3.6,
+      "passed": false,
+      "tool_calls": 9,
+      "tools_used": [
+        "search_docs",
+        "search_code",
+        "search_code",
+        "search_code",
+        "search_code",
+        "search_code",
+        "search_code",
+        "get_component_deps",
+        "get_component_deps"
+      ]
+    },
+    {
+      "id": "TC-004",
+      "query": "ThresholdSensor MDS model definition",
+      "score": 8.55,
+      "passed": true,
+      "tool_calls": 1,
+      "tools_used": [
+        "search_code"
+      ]
+    },
+    {
+      "id": "TC-007",
+      "query": "SEL event logging function",
+      "score": 3.6,
+      "passed": false,
+      "tool_calls": 1,
+      "tools_used": [
+        "search_code"
+      ]
+    },
+    {
+      "id": "TC-009",
+      "query": "GetSensorReading IPMI command",
+      "score": 7.65,
+      "passed": true,
+      "tool_calls": 3,
+      "tools_used": [
+        "search_docs",
+        "search_code",
+        "search_code"
+      ]
+    },
+    {
+      "id": "TC-021",
+      "query": "sensor 和 power_mgmt 之间的关系",
+      "score": 5.2,
+      "passed": false,
+      "tool_calls": 4,
+      "tools_used": [
+        "get_component_deps",
+        "get_component_deps",
+        "search_docs",
+        "search_multi"
+      ]
+    },
+    {
+      "id": "TC-022",
+      "query": "sensor fructrl FRU dependency",
+      "score": 10.0,
+      "passed": true,
+      "tool_calls": 4,
+      "tools_used": [
+        "get_component_deps",
+        "get_component_deps",
+        "search_code",
+        "search_code"
+      ]
+    },
+    {
+      "id": "TC-024",
+      "query": "libipmi IPMI command execution in sensor",
+      "score": 6.35,
+      "passed": true,
+      "tool_calls": 4,
+      "tools_used": [
+        "search_code",
+        "search_code",
+        "search_docs",
+        "get_component_deps"
+      ]
+    },
+    {
+      "id": "TC-025",
+      "query": "frudata fructrl FRU 数据流",
+      "score": 5.45,
+      "passed": false,
+      "tool_calls": 9,
+      "tools_used": [
+        "search_docs",
+        "get_component_deps",
+        "get_component_deps",
+        "search_code",
+        "search_code",
+        "search_code",
+        "search_code",
+        "search_multi",
+        "search_code"
+      ]
+    },
+    {
+      "id": "TC-026",
+      "query": "sensor devmon device sensor event handling",
+      "score": 3.6,
+      "passed": false,
+      "tool_calls": 5,
+      "tools_used": [
+        "search_docs",
+        "search_code",
+        "search_code",
+        "get_component_deps",
+        "get_component_deps"
+      ]
+    },
+    {
+      "id": "TC-037",
+      "query": "bios_upgrade BIOS 升级流程实现",
+      "score": 3.6,
+      "passed": false,
+      "tool_calls": 4,
+      "tools_used": [
+        "search_docs",
+        "search_docs",
+        "search_code",
+        "search_code"
+      ]
+    }
+  ]
+}

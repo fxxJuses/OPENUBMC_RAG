@@ -127,7 +127,12 @@ class AgentEvaluator:
             config=config,
         )
         self.engine.set_chunk_index(chunks)
-        logger.info("AgentEvaluator initialized with %d chunks", len(chunks))
+        logger.info("AgentEvaluator initialized with %d code chunks", len(chunks))
+
+        # 加载文档索引
+        self.index_mgr.load_docs_index()
+        docs_count = len(self.index_mgr.get_all_docs_chunks())
+        logger.info("Docs index loaded: %d doc chunks", docs_count)
 
     def evaluate_single(
         self,
@@ -223,12 +228,14 @@ class AgentEvaluator:
         """创建 Agent 实例（复用已加载的索引引擎）。"""
         from langchain.agents import create_agent
 
-        from ubmc_rag.chat.chain import _AGENT_SYSTEM_PROMPT, create_llm
+        from ubmc_rag.chat.chain import create_llm
         from ubmc_rag.chat.tools import create_tools
+        from ubmc_rag.prompts import PromptLibrary
 
         tools = create_tools(self.engine, self.index_mgr)
         llm = create_llm(model=self.answer_model)
-        agent = create_agent(model=llm, tools=tools, system_prompt=_AGENT_SYSTEM_PROMPT)
+        prompt_lib = PromptLibrary()
+        agent = create_agent(model=llm, tools=tools, system_prompt=prompt_lib.get_system_prompt())
 
         return agent, self.engine
 

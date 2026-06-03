@@ -2,7 +2,7 @@
 
 统一管理嵌入服务（Embedder）、向量存储（VectorStore）和
 BM25 索引（BM25Index）的生命周期，提供分批构建、增量更新
-和内存优化等能力。
+和内存优化等能力。支持代码和文档两个独立的 collection。
 """
 
 from __future__ import annotations
@@ -29,24 +29,37 @@ class IndexManager:
 
     负责索引的构建（含分批嵌入和内存管理）、加载、查询和统计。
     维护一个内存中的分块索引用于结果重建。
+    支持代码 (openubmc_code) 和文档 (openubmc_docs) 两个独立 collection。
 
     Attributes:
         config: 应用配置
         embedder: 向量嵌入服务
-        vector_store: ChromaDB 向量存储
-        bm25: BM25 关键词索引
+        vector_store: ChromaDB 代码向量存储
+        docs_vector_store: ChromaDB 文档向量存储
+        bm25: 代码 BM25 关键词索引
+        docs_bm25: 文档 BM25 关键词索引
     """
 
     def __init__(self, config: AppConfig):
         self.config = config
         self.embedder = Embedder(config.indexing)
+        # 代码索引
         self.vector_store = VectorStore(config.indexing)
         self.bm25 = BM25Index()
+        # 文档索引（使用独立的 collection）
+        docs_config = config.indexing.model_copy(
+            update={"chroma_collection": config.indexing.docs_collection}
+        )
+        self.docs_vector_store = VectorStore(docs_config)
+        self.docs_bm25 = BM25Index()
+
         self._chunks_index: dict[str, CodeChunk] = {}
+        self._docs_chunks_index: dict[str, CodeChunk] = {}
         self._checksums_path = Path(config.indexing.persist_dir) / "checksums.json"
+        self._docs_checksums_path = Path(config.indexing.persist_dir) / "docs_checksums.json"
 
     def build_index(self, chunks: list[CodeChunk], full_rebuild: bool = False) -> None:
-        """构建或重建索引，分批处理以控制内存占用。
+        """构建或重建代码索引，分批处理以控制内存占用。
 
         处理流程：
         1. 先构建 BM25 索引（无 GPU/内存压力）
@@ -62,44 +75,73 @@ class IndexManager:
             self.vector_store.reset()
 
         total = len(chunks)
-        logger.info("Building index for %d chunks...", total)
+        logger.info("Building code index for %d chunks...", total)
 
         ensure_dir(self.config.indexing.persist_dir)
 
-        # 构建 BM25 索引
         self.bm25.build(chunks)
         bm25_path = Path(self.config.indexing.persist_dir) / "bm25_index.json"
         self.bm25.save(bm25_path)
 
-        # 分批计算嵌入并写入向量库
+        self._build_vector_index(chunks, self.vector_store, self._chunks_index)
+
+        self._save_checksums(chunks, self._checksums_path)
+
+        logger.info(
+            "Code index built: %d chunks, ChromaDB has %d total",
+            total, self.vector_store.count(),
+        )
+
+    def build_docs_index(self, chunks: list[CodeChunk], full_rebuild: bool = False) -> None:
+        """构建或重建文档索引，独立于代码索引。
+
+        Args:
+            chunks: 文档分块列表
+            full_rebuild: 是否全量重建
+        """
+        if full_rebuild:
+            self.docs_vector_store.reset()
+
+        total = len(chunks)
+        logger.info("Building docs index for %d chunks...", total)
+
+        ensure_dir(self.config.indexing.persist_dir)
+
+        self.docs_bm25.build(chunks)
+        docs_bm25_path = Path(self.config.indexing.persist_dir) / "bm25_docs_index.json"
+        self.docs_bm25.save(docs_bm25_path)
+
+        self._build_vector_index(chunks, self.docs_vector_store, self._docs_chunks_index)
+
+        self._save_checksums(chunks, self._docs_checksums_path)
+
+        logger.info(
+            "Docs index built: %d chunks, ChromaDB has %d total",
+            total, self.docs_vector_store.count(),
+        )
+
+    def _build_vector_index(
+        self, chunks: list[CodeChunk],
+        vector_store: VectorStore, chunks_index: dict[str, CodeChunk],
+    ) -> None:
+        """分批计算嵌入并写入向量库的通用方法。"""
+        total = len(chunks)
         batch_size = getattr(self.config.indexing, 'embedding_batch_size', 256) or 256
         for i in range(0, total, batch_size):
             batch = chunks[i:i + batch_size]
 
             batch = self.embedder.embed_chunks(batch)
-            self.vector_store.add_chunks(batch)
+            vector_store.add_chunks(batch)
 
-            # 清除嵌入以释放内存，同时写入分块索引
             for c in batch:
                 c.embedding = None
-                self._chunks_index[c.chunk_id] = c
+                chunks_index[c.chunk_id] = c
 
             logger.info("Indexed %d/%d chunks", min(i + batch_size, total), total)
             gc.collect()
 
-        # 保存文件校验和，供增量更新时比较
-        self._save_checksums(chunks)
-
-        logger.info(
-            "Index built: %d chunks, ChromaDB has %d total",
-            total, self.vector_store.count(),
-        )
-
     def load_index(self) -> bool:
-        """从磁盘加载现有索引。
-
-        加载 BM25 索引文件，然后从 ChromaDB 恢复分块数据到内存索引，
-        使 get_all_chunks() 和 get_chunk() 可用。
+        """从磁盘加载现有代码索引。
 
         Returns:
             成功加载返回 True，索引不存在返回 False
@@ -109,19 +151,44 @@ class IndexManager:
 
         chroma_count = self.vector_store.count()
         if chroma_count > 0:
-            self._load_chunks_from_chroma()
+            self._load_chunks_from_chroma(
+                self.vector_store, self._chunks_index
+            )
             logger.info(
-                "Loaded existing index: %d chunks in ChromaDB, %d in memory",
+                "Loaded code index: %d chunks in ChromaDB, %d in memory",
                 chroma_count, len(self._chunks_index),
             )
             return True
 
         return loaded
 
-    def _load_chunks_from_chroma(self) -> None:
+    def load_docs_index(self) -> bool:
+        """从磁盘加载现有文档索引。
+
+        Returns:
+            成功加载返回 True，索引不存在返回 False
+        """
+        docs_bm25_path = Path(self.config.indexing.persist_dir) / "bm25_docs_index.json"
+        loaded = self.docs_bm25.load(docs_bm25_path)
+
+        chroma_count = self.docs_vector_store.count()
+        if chroma_count > 0:
+            self._load_chunks_from_chroma(
+                self.docs_vector_store, self._docs_chunks_index
+            )
+            logger.info(
+                "Loaded docs index: %d chunks in ChromaDB, %d in memory",
+                chroma_count, len(self._docs_chunks_index),
+            )
+            return True
+
+        return loaded
+
+    def _load_chunks_from_chroma(
+        self, vector_store: VectorStore, chunks_index: dict[str, CodeChunk],
+    ) -> None:
         """从 ChromaDB 集合中恢复所有分块到内存索引。"""
-        collection = self.vector_store.collection
-        # ChromaDB get() 不带参数会返回所有文档
+        collection = vector_store.collection
         result = collection.get(include=["documents", "metadatas"])
         if not result["ids"]:
             return
@@ -129,33 +196,48 @@ class IndexManager:
         for i, chunk_id in enumerate(result["ids"]):
             meta = result["metadatas"][i] if result["metadatas"] else {}
             content = result["documents"][i] if result["documents"] else ""
-            self._chunks_index[chunk_id] = CodeChunk.from_chroma_metadata(
+            chunks_index[chunk_id] = CodeChunk.from_chroma_metadata(
                 chunk_id=chunk_id, content=content, meta=meta,
             )
 
     def get_chunk(self, chunk_id: str) -> Optional[CodeChunk]:
         """根据 ID 获取单个代码分块。"""
-        return self._chunks_index.get(chunk_id)
+        return self._chunks_index.get(chunk_id) or self._docs_chunks_index.get(chunk_id)
 
     def get_all_chunks(self) -> list[CodeChunk]:
         """获取内存索引中的所有代码分块。"""
         return list(self._chunks_index.values())
 
+    def get_all_docs_chunks(self) -> list[CodeChunk]:
+        """获取内存索引中的所有文档分块。"""
+        return list(self._docs_chunks_index.values())
+
     def get_stats(self) -> dict:
         """返回索引的统计信息。"""
         return {
-            "total_chunks": len(self._chunks_index),
+            "code_chunks": len(self._chunks_index),
             "chroma_count": self.vector_store.count(),
             "bm25_docs": len(self.bm25.get_chunk_ids()),
+            "docs_chunks": len(self._docs_chunks_index),
+            "docs_chroma_count": self.docs_vector_store.count(),
+            "docs_bm25_docs": len(self.docs_bm25.get_chunk_ids()),
         }
 
-    def _save_checksums(self, chunks: list[CodeChunk]) -> None:
+    def search_docs_vector(self, query_embedding: list[float], top_k: int = 10) -> list[dict]:
+        """在文档向量库中搜索。"""
+        return self.docs_vector_store.search(query_embedding, top_k=top_k)
+
+    def search_docs_bm25(self, query: str, top_k: int = 50) -> list[tuple[str, float]]:
+        """在文档 BM25 索引中搜索。"""
+        return self.docs_bm25.search(query, top_k=top_k)
+
+    def _save_checksums(self, chunks: list[CodeChunk], path: Path) -> None:
         """保存文件内容的 MD5 校验和，用于增量更新时的变更检测。"""
         checksums = {}
         for c in chunks:
             key = f"{c.repo_name}:{c.file_path}"
             checksums[key] = hashlib.md5(c.content.encode()).hexdigest()
-        self._checksums_path.parent.mkdir(parents=True, exist_ok=True)
-        self._checksums_path.write_text(
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
             json.dumps(checksums, indent=2), encoding="utf-8"
         )

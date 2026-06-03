@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 # DashScope API 配置常量
 _API_BATCH_SIZE = 10          # 单次 API 调用最大文本数（DashScope text-embedding-v4 限制 ≤10）
-_MAX_CHARS = 24000            # 单个文本最大字符数（约 8K tokens）
+_MAX_CHARS = 16000            # 单个文本最大字符数（保守估计约 8K tokens，适配中英混合）
 _DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 _DASHSCOPE_MODEL = "text-embedding-v4"
 _MIN_INTERVAL = 0.1           # API 调用最小间隔（秒）
@@ -75,11 +75,19 @@ class Embedder:
         items = sorted(resp.data, key=lambda x: x.index)
         return [item.embedding for item in items]
 
+    def _embed_one(self, text: str) -> list[float]:
+        """嵌入单条文本，失败返回零向量。"""
+        text = text[:_MAX_CHARS]
+        try:
+            return self._call_api([text])[0]
+        except Exception:
+            return [0.0] * self._dimension
+
     def embed_chunks(self, chunks: list[CodeChunk]) -> list[CodeChunk]:
         """批量计算代码分块的嵌入向量。
 
-        分批调用 API，每批 _API_BATCH_SIZE 条，失败自动重试一次。
-        重试仍失败时填充零向量作为降级处理。
+        分批调用 API，每批 _API_BATCH_SIZE 条。如果整批失败，
+        逐条重试以隔离超长文本导致的失败。
 
         Args:
             chunks: 待嵌入的代码分块列表
@@ -97,19 +105,15 @@ class Embedder:
             try:
                 embeddings = self._call_api(texts)
             except Exception as e:
-                logger.error("API call failed at batch %d/%d: %s", i, total, e)
-                time.sleep(2)
-                try:
-                    embeddings = self._call_api(texts)
-                except Exception as e2:
-                    logger.error("Retry failed: %s", e2)
-                    embeddings = [[0.0] * self._dimension for _ in batch]
+                logger.warning("Batch %d/%d failed (%s), retrying individually", i, total, e)
+                time.sleep(1)
+                embeddings = [self._embed_one(t) for t in texts]
 
             for chunk, emb in zip(batch, embeddings):
                 chunk.embedding = emb
 
             done = min(i + len(batch), total)
-            if done % 200 == 0 or done == total:
+            if done % 500 == 0 or done == total:
                 logger.info("Embedded %d/%d chunks", done, total)
 
             time.sleep(_MIN_INTERVAL)

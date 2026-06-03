@@ -35,6 +35,8 @@ git:
       description: "MDB interface library"
     - name: "infrastructure"
       description: "Infrastructure and build system"
+    - name: "docs"
+      description: "openUBMC documentation and developer guides"
 
 # File ingestion settings
 ingestion:
@@ -61,7 +63,7 @@ ingestion:
         - "mds/types.json"
     markdown:
       extensions: [".md"]
-      enabled: false
+      enabled: true
 
   exclude_paths:
     - "build/"
@@ -71,6 +73,12 @@ ingestion:
     - "tests/"
     - "dt_test/"
     - "third_party/"
+    # docs repo: skip image asset dirs (265MB+) and VitePress project configs
+    - "images/"
+    - "node_modules/"
+    - ".vitepress/"
+    - "deploy/"
+    - "scripts/"
 
   max_chunk_lines: 200
   min_chunk_lines: 5
