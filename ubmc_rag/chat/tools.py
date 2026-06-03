@@ -124,15 +124,18 @@ def create_tools(
         query: str,
         top_k: int = 5,
     ) -> str:
-        """搜索 openUBMC 官方文档知识库。
-        适用于：查找架构说明、开发指南、API 参考、配置规范、FAQ 等。
-        当需要理解 openUBMC 的概念、框架设计、开发流程时优先使用此工具。
+        """搜索 openUBMC 官方文档知识库（1866篇文档，含架构、API、规范、FAQ）。
+        **重要**：回答任何涉及 openUBMC 概念、架构、组件职责、D-Bus/MDB/MDS/CSR 机制、
+        开发流程的问题时，必须先调用此工具获取准确的领域知识，然后再用 search_code 查找代码。
+
+        适用于：架构说明、设计原理、组件职责、开发指南、API 参考、CSR/MDS 配置规范、IPMI 命令、FAQ。
 
         示例查询：
-        - "MDS 框架是什么"
-        - "CSR 配置方法"
-        - "组件如何开发"
-        - "IPMI 命令规范"
+        - "sensor 组件如何创建 D-Bus 资源"
+        - "MDS 框架是什么，数据模型如何定义"
+        - "CSR 配置方法和语法规范"
+        - "组件启动流程和 init 生命周期"
+        - "IPMI Sensor 命令规范"
         """
         if docs_engine is not None:
             results = docs_engine.search(query=query, top_k=min(top_k, 20))
